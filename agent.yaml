@@ -1,0 +1,179 @@
+# ハエ脳エージェント（仮称）エージェント定義
+#
+# このファイルが数値パラメータの唯一の正 (single source of truth) です。
+# 各 .md は「なぜその値なのか」を説明する文書であり、
+# 値が食い違う場合は常に本ファイルを優先します。
+#
+# **本ファイルはまだ型だけです。** 名前は仮称、ハエ脳の値（fly 以下）は
+# Stonkfly / 設計メモから写した候補値であり、人間が確認するまで確定しません。
+# 売買本体（strategy / risk）はナンピノニクスの値を Phase 1 で持ち込みます。
+# 型はナンピノニクスの agent.yaml に合わせています。
+
+# 本ファイルの形式の版。エージェント本体のバージョンではありません。
+schema_version: 1
+
+# エージェント本体のバージョン。major.minor の2桁で管理します。
+# 本項目だけがバージョン情報の唯一の正です。文字列で持ちます。
+version: "0.1"
+
+agent:
+  # 名前は未定。候補は README.md「名前の候補」から人間が選びます。
+  # 決まったら id / name / name_en / tagline を書き換え、パッケージ名も合わせます。
+  id: fly # 仮称
+  name: ハエ脳エージェント（仮称）
+  name_en: Fly Agent (provisional)
+  tagline: 見るだけ。止めるだけ。
+  archetype: connectome-veto # ナンピノニクスの売買本体に、ハエ脳の拒否権を足した型
+  phase: design # design | paper | halted
+  documents:
+    personality: personality.md # 追加予定
+    strategy: strategy.md # 追加予定（ナンピノニクスから流用）
+    risk_policy: risk-policy.md # 追加予定（ナンピノニクスから流用）
+    memory_policy: memory-policy.md # 追加予定
+  status_file: status.yaml # 追加予定
+  status_output: var/status.yaml
+  performance_output: var/performance.yaml
+  visual_profile_file: visual-profile.yaml # 追加予定
+
+runtime:
+  schedule: "*/15 * * * *" # 15分ごと（ナンピノニクスと同じ）
+  timezone: Asia/Tokyo
+  max_runtime_sec: 120 # 1回の判断にかける上限。シミュレーションが収まらなければ部分切り出しへ
+  on_error: hold # 例外・不明時は必ず HOLD（発注しない）
+  stale_tick_hours: 24
+  dry_run: true # 型だけの段階では発注を組み立てるだけ。paper へ出すのは Phase 1 以降に人間が切り替える
+
+market:
+  exchange: bitbank
+  quote_currency: jpy
+  pairs:
+    - btc_jpy
+
+cli:
+  command: bitbank
+  package: bitbank-lab-cli
+  repo: https://github.com/bitbankinc/bitbank-lab-cli
+  install: "npm i -g bitbank-lab-cli"
+  global_flags: ["--format=json", "--machine"]
+  mode: paper # ペーパートレードのみ
+
+  # 実行してはならないコマンド（実資金・実績破壊）
+  forbidden:
+    - "bitbank trade create-order"
+    - "bitbank trade cancel-order"
+    - "bitbank paper reset"
+
+  observe:
+    exchange_status: "bitbank status"
+    circuit_break: "bitbank circuit-break {pair}"
+    ticker: "bitbank ticker {pair}"
+    candles_daily: "bitbank candles {pair} --type=1day"
+    candles_hourly: "bitbank candles {pair} --type=1hour"
+    candles_15min: "bitbank candles {pair} --type=15min"
+    depth: "bitbank depth {pair}"
+    pairs: "bitbank pairs"
+
+  account:
+    assets: "bitbank paper assets"
+    pnl: "bitbank paper pnl --pair={pair}"
+    active_orders: "bitbank paper active-orders"
+    trade_history: "bitbank paper trade-history"
+
+  act:
+    resolve_fills: "bitbank paper tick"
+    create_order: "bitbank paper create-order --pair={pair} --side={side} --type={type} --price={price} --amount={amount}"
+    cancel_order: "bitbank paper cancel-order --id={order_id}"
+
+  setup:
+    init_account: "bitbank paper init --jpy=1000000"
+
+  state_path: var/paper-state.json
+
+capital:
+  initial_jpy: 1000000
+
+# 売買本体。ナンピノニクスの strategy / risk を Phase 1 でそのまま持ち込む。
+# ここには置き場所だけを示す。値を勝手に作らない（観測していない値を書かない）。
+strategy: null # Phase 1 で流用
+risk: null # Phase 1 で流用
+
+# 買いを止める権利だけを外部の判定器に渡す（docs/IMPLEMENTATION_PLAN.md Phase 1）。
+#
+# 決定的コードが BUY と決めたあとにだけ通し、止める方向にしか関与させない。
+# 判定器は backend で切り替える。ハエ版（fly）は Phase 3 で追加する。
+veto:
+  enabled: false # 有効にするかどうかは人間が決める
+  backend: always_proceed # always_proceed | llm | fly（Phase 3 で追加）| random（評価用。Phase 4 で追加）
+  on_failure: hold # proceed | hold。シミュレーション失敗・入力欠損も hold
+  read_last_n: 16
+
+# ハエ脳。読み出しの閾値・対象ニューロン・神経時間・報酬の閾値はここに置き、
+# **ハエが書き換えない**（CLAUDE.md）。学習で変わるのはシナプス重みだけ。
+#
+# 以下の値は Stonkfly docs/model.md と docs/DESIGN_MEMO.md から写した候補値。
+# 配線図の選定（要確認）が終わるまで確定しない。
+fly:
+  connectome:
+    source: null # MaleCNS v1.0 か FlyWire か。要確認。ここでは選定しない
+    license: null # 要確認
+    scope: null # full | mushroom_body（全脳か部分切り出しかは Phase 3 で性能を測ってから決める）
+
+  vision:
+    width: 320
+    height: 180
+    background: light # 暗い背景では KC がほぼ発火しなかった（Stonkfly）
+    candle_type: 15min
+    lookback_candles: 8 # 直近2時間。目安は2時間〜1日
+    show: [candles, pair, bid, ask]
+    hide: [balance, pnl, position] # ハエに「自分の懐」を見せない
+    receptors:
+      luminance: [R1, R2, R3, R4, R5, R6] # 線形 sRGB 輝度
+      color: [R8] # 青／緑の代理値
+
+  simulation:
+    model: lif
+    dt_ms: 0.1
+    neural_time_per_observation_sec: 0.5
+    membrane_tau_ms: 20
+    synaptic_tau_ms: 5
+    threshold_mv: -45
+    transmission_delay_ms: 1.8
+    refractory_ms: 2.2
+
+  readout:
+    # 「回避側」と定めた指標が閾値を超えたら STOP、それ以外は PROCEED。
+    # 設計者が決めた読み替えであり、「売買を判断する細胞」ではない。
+    neurons: null # Stonkfly の DNp20 / DNpe017 をそのまま使うかは未決（docs/DESIGN_MEMO.md 6 章）
+    stop_threshold_hz: null # 未決。Phase 3 で決め、人間が確認する
+
+  reward:
+    enabled: false # Phase 5 まで無効。学習なしで動かす
+    trigger: position_closed # 決済が確定した回だけ。観測ごとには出さない
+    threshold_jpy: null # 手数料より十分大きい値。Phase 5 で決める
+    reward_cells: PAM11 # 報酬 15 細胞（Stonkfly と同じ細胞群から始める）
+    aversive_cells: PPL101 # 嫌悪 2 細胞
+    plasticity_edges: [KC->MBON07, KC->MBON11]
+    rule: anti_hebbian # まずは Stonkfly と同じ（抑圧のみ）
+    memory_decay_sec: null # Stonkfly は 1,800 秒。運用スケール（日〜週）に伸ばす。未検証
+    weight_snapshot_every_n: 96 # 何回の観測ごとに重みを保存するか（15分間隔なら1日）
+
+memory:
+  root: var/memory/
+  decisions:
+    path: "var/memory/decisions/{date}.jsonl"
+    retention_days: 90
+    read_last_n: 16
+  daily:
+    path: "var/memory/daily/{date}.md"
+    write_at: "23:50"
+    read_last_n: 7
+  lessons:
+    path: var/memory/lessons.md
+    max_entries: 50
+    write_trigger: position_closed
+  weights:
+    path: "var/memory/weights/{date}.npz" # シナプス重みのスナップショット。Git 管理外
+  redact: # 記憶に書き込んではならない値
+    - api_key
+    - api_secret
+    - profile_name

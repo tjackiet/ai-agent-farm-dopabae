@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(bitbank trade create-order:*)",
+      "Bash(bitbank trade cancel-order:*)",
+      "Bash(bitbank paper reset:*)"
+    ]
+  }
+}
