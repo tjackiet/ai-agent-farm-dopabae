@@ -24,17 +24,17 @@
 | #   | 対象                                          | 主なファイル                                  |
 | --- | --------------------------------------------- | --------------------------------------------- |
 | 1   | 個体の性格設定                                 | `agent.yaml` / `personality.md`               |
-| 2   | 檻（方向を受け取り、数量・価格・上限・諦めを決める決定的コード） | `strategy.md` / `agent.yaml`（追加予定） |
-| 3   | リスク制約                                    | `risk-policy.md` / `agent.yaml`（追加予定）   |
-| 4   | 記憶方式                                      | `memory-policy.md`（追加予定）                |
-| 5   | bitbank-lab-cli との接続（paper のみ）        | （実装予定）                                  |
-| 6   | 方向インタフェース（APPROACH / AVOID / NONE）と評価用の出どころ（常時 APPROACH・ランダム） | （実装予定。Phase 1） |
+| 2   | 檻（方向を受け取り、数量・価格・上限・諦めを決める決定的コード） | `strategy.md` / `agent.yaml` / `dopabae/cage.py` |
+| 3   | リスク制約                                    | `risk-policy.md` / `agent.yaml`               |
+| 4   | 記憶方式                                      | `memory-policy.md` / `dopabae/journal.py`     |
+| 5   | bitbank-lab-cli との接続（paper のみ）        | `dopabae/cli.py` / `dopabae/observe.py`       |
+| 6   | 方向インタフェース（APPROACH / AVOID / NONE）と評価用の出どころ（常時 APPROACH・ランダム） | `dopabae/direction.py` |
 | 7   | チャート画像の描画と光受容細胞へのマッピング   | （実装予定。Phase 2）                         |
 | 8   | コネクトーム LIF シミュレーション（重み固定） | （実装予定。Phase 3）                         |
 | 9   | 読み出し（接近側 − 回避側の発火率 → 方向）     | `agent.yaml` の閾値・対象ニューロン（Phase 3） |
 | 10  | 評価（ランダム・檻だけとの比較など）           | （実装予定。Phase 4・6）                      |
 | 11  | ドーパミンによる KC→MBON の可塑性と報酬        | （実装予定。Phase 5）                         |
-| 12  | 判断ログと運用実績の保存（ハエの反応を含む）   | （実装予定）                                  |
+| 12  | 判断ログと運用実績の保存（ハエの反応を含む）   | `dopabae/journal.py`（実績の集計は実装予定）  |
 | 13  | 定期実行                                      | （実装予定）                                  |
 | 14  | 記録の言語化（ハエの反応の説明を含む）         | （実装予定）                                  |
 | 15  | キャラクターデザイン定義                      | `character-design.yaml`（追加予定）           |

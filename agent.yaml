@@ -4,10 +4,9 @@
 # 各 .md は「なぜその値なのか」を説明する文書であり、
 # 値が食い違う場合は常に本ファイルを優先します。
 #
-# **本ファイルはまだ型だけです。** ハエ脳の値（fly 以下）は
-# Stonkfly / 設計メモから写した候補値であり、人間が確認するまで確定しません。
-# 売買本体（strategy / risk）はナンピノニクスの値を Phase 1 で持ち込みます。
-# 型はナンピノニクスの agent.yaml に合わせています。
+# ハエ脳の値（fly 以下）は Stonkfly / 設計メモから写した候補値であり、
+# 人間が確認するまで確定しません。檻（strategy / risk）の値はナンピノニクスから
+# 持ち込んだ候補値です。型はナンピノニクスの agent.yaml に合わせています。
 
 # 本ファイルの形式の版。エージェント本体のバージョンではありません。
 schema_version: 1
@@ -27,10 +26,11 @@ agent:
   phase: design # design | paper | halted
   documents:
     personality: personality.md
-    strategy: strategy.md # 追加予定（ナンピノニクスから流用）
-    risk_policy: risk-policy.md # 追加予定（ナンピノニクスから流用）
-    memory_policy: memory-policy.md # 追加予定
-  status_file: status.yaml # 追加予定
+    strategy: strategy.md
+    risk_policy: risk-policy.md
+    memory_policy: memory-policy.md
+  # スキーマの見本。実行では書き換えない。
+  status_file: status.yaml
   status_output: var/status.yaml
   performance_output: var/performance.yaml
   visual_profile_file: visual-profile.yaml # 追加予定
@@ -41,7 +41,7 @@ runtime:
   max_runtime_sec: 120 # 1回の判断にかける上限。シミュレーションが収まらなければ部分切り出しへ
   on_error: hold # 例外・不明時は必ず HOLD（発注しない）
   stale_tick_hours: 24
-  dry_run: true # 型だけの段階では発注を組み立てるだけ。paper へ出すのは Phase 1 以降に人間が切り替える
+  dry_run: true # 発注を組み立てるだけ。paper へ出すかは、実口座で1周を確認してから人間が切り替える
 
 market:
   exchange: bitbank

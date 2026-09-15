@@ -1,0 +1,60 @@
+# ドパバエの現在状態
+#
+# 本ファイルはスキーマの見本です。実行では書き換えません。
+# 実行のたびのスナップショットは var/status.yaml（Git 管理外）へ書き出します。
+#
+# 判断に使う状態は、どちらのファイルでもなく、毎回 bitbank paper の実測から
+# 導出します（memory-policy.md）。
+# null は「まだ観測していない」を意味し、推測値を入れてはいけません。
+
+schema_version: 1
+
+updated_at: null # ISO8601 (Asia/Tokyo)
+run_id: null
+state: NOT_INITIALIZED # NOT_INITIALIZED | IDLE | HOLDING | HIBERNATING | HALTED
+mood: ドパ切れ # 表示用。personality.md の状態別セリフに対応。
+
+account:
+  initial_jpy: 1000000
+  cash_jpy: null
+  equity_jpy: null
+  drawdown_pct: null # (equity - initial) / initial * 100
+
+market:
+  pair: btc_jpy
+  last_price: null
+  bid: null # 買い気配。買い指値はここに置く
+  ask: null # 売り気配。売り指値はここに置く
+  source: null # 例: "bitbank ticker btc_jpy --format=json --machine"
+  fetched_at: null
+
+position:
+  amount: 0
+  avg_cost_jpy: null
+  cost_basis_jpy: 0
+  unrealized_pnl_jpy: null
+  unrealized_pnl_pct: null
+  opened_at: null
+  age_days: null
+  buys_in_round: 0 # いまの建玉で何回近づいたか
+
+orders:
+  pending_buy: [] # [{ order_id, price, amount, placed_at }]
+  pending_sell: [] # [{ order_id, price, amount, placed_at }]
+
+# ハエの答え（観測値）。source / value / reason / error / seed
+last_direction: null
+
+last_decision:
+  action: null # BUY | SELL | HOLD
+  reason: null
+  at: null
+
+counters:
+  fills_today: 0
+  total_fills: 0
+  closed_positions: 0
+  realized_pnl_jpy: 0
+  cooldown_until: null
+
+notes: 設計段階のため未稼働。ペーパートレード口座は未初期化。
