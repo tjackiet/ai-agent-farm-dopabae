@@ -19,9 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 運用は 3.11（Stonkfly の環境要件。docs/IMPLEMENTATION_PLAN.md 3 節の未確認の前提）。
-        # 新しい版も回して、動かなくなったことに早く気づく。
-        python-version: ["3.11", "3.13"]
+        # 3.11 は Stonkfly の環境要件（docs/IMPLEMENTATION_PLAN.md 3 節）。
+        # 3.14 は 2026-09-15 に実機で 1 周を確認した版。手元で動く版を CI が見ていないと、
+        # 壊れたことに運用中まで気づけない。
+        python-version: ["3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

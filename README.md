@@ -141,6 +141,7 @@ Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見�
 ## セットアップ
 
 必要なのは Python 3.11 以上と PyYAML だけです（シミュレーションの依存はまだ入れていません）。
+2026-09-15 に macOS の Python 3.14 と `bitbank-lab-cli` 0.5.0 で 1 周を確認しています。
 
 ```bash
 python3 -m venv .venv
