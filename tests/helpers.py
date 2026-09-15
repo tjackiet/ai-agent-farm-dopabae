@@ -164,6 +164,20 @@ class FakeCli:
         return subprocess.CompletedProcess(list(argv), 0, json.dumps(body), "")
 
 
+def candles(count: int = 12, last: int = 14_700_000, interval_min: int = 15, end_ms: int | None = None) -> list[dict]:
+    """最後の1本が進行中の足になるように、現在時刻から遡って並べる。"""
+    end = end_ms if end_ms is not None else NOW_MS
+    step = interval_min * 60_000
+    rows = []
+    for index in range(count):
+        close = last - (count - 1 - index) * 20_000
+        rows.append({
+            "open": close - 5_000, "high": close + 15_000, "low": close - 15_000,
+            "close": close, "vol": 10, "timestamp": end - (count - 1 - index) * step,
+        })
+    return rows
+
+
 def default_responses(
     *,
     last: int = 14_700_000,
@@ -186,6 +200,7 @@ def default_responses(
             "vol": 100,
             "timestamp": ticker_ms,
         },
+        "candles": candles(last=last),
         "pairs": [PAIR_ROW],
         "paper tick": {"filled": [], "warnings": [], "lastTickAt": "2026-09-15T00:00:00.000Z"},
         "paper assets": list(assets)

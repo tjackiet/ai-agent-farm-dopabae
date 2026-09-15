@@ -123,3 +123,25 @@ class CycleTest(unittest.TestCase):
         cfg = dataclasses.replace(self.config, direction_source="random", direction_random_seed=3)
         cycle = self.run_cycle(FakeCli(default_responses()), config=cfg)
         self.assertEqual(cycle.direction["seed"], 3)
+
+
+class VisionCycleTest(CycleTest):
+    def test_vision_hash_and_png_are_recorded(self):
+        fake = FakeCli(default_responses())
+        cycle = self.run_cycle(fake, force_dry_run=True)
+        self.assertIsNotNone(cycle.vision)
+        self.assertEqual(len(cycle.vision["sha256"]), 64)
+        self.assertEqual(cycle.vision["candle_count"], self.config.vision_lookback_candles)
+        record = self.journal()[-1]
+        self.assertEqual(record["vision"]["sha256"], cycle.vision["sha256"])
+        pngs = list((self.root / "var" / "memory" / "vision" / "2026-09-15").glob("*.png"))
+        self.assertEqual(len(pngs), 1)
+        self.assertTrue(any("candles" in c and "--type=15min" in c for c in fake.calls))
+
+    def test_render_failure_warns_but_control_groups_keep_deciding(self):
+        fake = FakeCli(default_responses(), errors={"candles": "boom"})
+        cycle = self.run_cycle(fake, force_dry_run=True)
+        self.assertIsNone(cycle.vision)
+        self.assertTrue(any("画像を描けません" in w for w in cycle.warnings))
+        self.assertEqual(cycle.action, "BUY")  # always_approach は画像を見ない
+        self.assertIsNone(self.journal()[-1]["vision"])
