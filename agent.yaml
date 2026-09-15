@@ -141,6 +141,11 @@ direction:
   source: always_approach # always_approach | random | fly（Phase 3 で追加）
   on_failure: hold # hold のみ。シミュレーション失敗・入力欠損も hold
   random_seed: null # source=random のとき。null なら実行ごとに記録して固定する
+  # source=random のときの三値の出しかた。null なら等確率。
+  # 評価（docs/IMPLEMENTATION_PLAN.md Phase 4）では、比べる相手が同じ期間に出した
+  # 頻度をここへ写す。頻度が違う対照群と比べても、方向の中身の差にならない。
+  # python3 -m dopabae.evaluate が写すべき値を出す。
+  random_weights: null # 例: {APPROACH: 0.5, AVOID: 0.2, NONE: 0.3}
 
 # ハエ脳。読み出しの閾値・対象ニューロン・神経時間・報酬の閾値はここに置き、
 # **ハエが書き換えない**（CLAUDE.md）。学習で変わるのはシナプス重みだけ。

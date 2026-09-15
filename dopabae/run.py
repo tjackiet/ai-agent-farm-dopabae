@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import cage, cli, config as config_module, direction as direction_module, journal, observe
+from . import performance as performance_module
 from . import state as state_module
 from . import timeutil, vision as vision_module
 from .orders import Executor, execute
@@ -210,6 +211,13 @@ def run_once(
         avg_cost=float(derived.position.avg_cost_jpy)
         if derived and derived.position.avg_cost_jpy is not None
         else None,
+        account={
+            "cash_jpy": float(derived.account.cash_total_jpy),
+            "equity_jpy": float(derived.account.equity_jpy),
+            "drawdown_pct": round(float(derived.account.drawdown_pct), 2),
+        }
+        if derived is not None
+        else None,
         vision=vision_dict,
         direction=direction_dict,
         cage=decision.cage,
@@ -242,6 +250,13 @@ def run_once(
         # 書き出し先は Git 管理外。リポジトリの status.yaml は見本として触らない。
         state_module.write_status(document, root / cfg.status_output)
         status_written = True
+
+        # 実績の集計。判断そのものには影響しないので、失敗しても HOLD にはしない。
+        # 判断ログを書いたあとに読む（この回の記録も集計に含めるため）。
+        try:
+            performance_module.refresh(cfg, now, repo_root)
+        except OSError as exc:
+            client.warnings.append(f"実績を書けませんでした: {exc}")
 
     return Cycle(
         run_id=run_id,

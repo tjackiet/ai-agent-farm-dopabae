@@ -59,22 +59,31 @@ def always_approach() -> Direction:
     return Direction(source="always_approach", value=APPROACH, reason="対照群：常に近づく")
 
 
-def random_direction(seed: int | None, run_key: str) -> Direction:
-    """同じ頻度でランダムに方向を出す対照群。
+def random_direction(
+    seed: int | None, run_key: str, weights: dict[str, float] | None = None
+) -> Direction:
+    """ランダムに方向を出す対照群。
 
     種は `agent.yaml` の `direction.random_seed`。null なら実行ごとに作り、
     判断ログに残す（あとから同じ列を再現できるようにするため）。
-    頻度は三値を等確率とする。固定版の頻度に合わせるのは Phase 4 の評価側で行う。
+
+    `weights` は三値の出しかた。null なら等確率。比べる相手（ハエ）が同じ期間に
+    出した頻度を写して使う。頻度が違う対照群と比べると、方向の**中身**の差ではなく
+    頻度の差を見てしまう（docs/DESIGN_MEMO.md 4 章の評価 4）。
     """
     actual = seed if seed is not None else random.SystemRandom().randrange(2**31)
     rng = random.Random(f"{actual}:{run_key}")
-    value = rng.choice(DIRECTIONS)
-    return Direction(
-        source="random",
-        value=value,
-        reason=f"対照群：ランダム（seed={actual}）",
-        seed=actual,
-    )
+    if weights:
+        population = [d for d in DIRECTIONS if weights.get(d, 0) > 0]
+        if not population:
+            return failed("random", "random_weights がすべて 0 です")
+        value = rng.choices(population, weights=[weights[d] for d in population], k=1)[0]
+        detail = ", ".join(f"{d}={weights.get(d, 0):g}" for d in DIRECTIONS)
+        reason = f"対照群：ランダム（seed={actual}, {detail}）"
+    else:
+        value = rng.choice(DIRECTIONS)
+        reason = f"対照群：ランダム（seed={actual}, 等確率）"
+    return Direction(source="random", value=value, reason=reason, seed=actual)
 
 
 def resolve(config: Config, run_key: str) -> Direction:
@@ -84,7 +93,9 @@ def resolve(config: Config, run_key: str) -> Direction:
         if source == "always_approach":
             return always_approach()
         if source == "random":
-            return random_direction(config.direction_random_seed, run_key)
+            return random_direction(
+                config.direction_random_seed, run_key, config.direction_random_weights
+            )
         if source == "fly":
             return failed(source, "ハエ版はまだ実装されていない（Phase 3）")
     except Exception as exc:  # noqa: BLE001 - 出どころの失敗で落とさず、檻に HOLD させる

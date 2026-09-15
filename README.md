@@ -27,7 +27,7 @@
 
 ## 現在の状態
 
-Phase 1（檻と方向インタフェース）と Phase 2 前半（ハエに見せる画像の描画）まで実装済み。
+Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見せる画像の描画）、Phase 4 の評価基盤まで実装済み。
 観測 → 画像 → 方向 → 檻 → 発注 → 記録が1周します。
 方向の出どころは評価用の「常時 APPROACH」と「ランダム」だけで、ハエ脳（Phase 3）はまだありません。
 実際のペーパー口座ではまだ回していません。実装の順序は `docs/IMPLEMENTATION_PLAN.md` を参照してください。
@@ -61,6 +61,7 @@ Phase 1（檻と方向インタフェース）と Phase 2 前半（ハエに見�
 ├── memory-policy.md        # 記憶の構造と書き込みルール
 ├── status.yaml             # 状態のスキーマの見本（実行時は var/status.yaml）
 ├── dopabae/                # エージェント本体（Python 3）
+├── scripts/make_arm.py     # 評価の腕（方向の出どころだけが違う設定）を作る
 ├── requirements.txt        # Python の依存。PyYAML のみ
 ├── tests/                  # agent.yaml が不変ルールを満たすことの検証
 ├── .claude/settings.json   # 禁止コマンドのハーネス側での二重化
@@ -83,6 +84,7 @@ Phase 1（檻と方向インタフェース）と Phase 2 前半（ハエに見�
 | `memory-policy.md`            | 記憶の構造と書き込みルール                                   |
 | `status.yaml`                 | 状態のスキーマの見本。実行では書き換えない                   |
 | `dopabae/`                    | エージェント本体。観測・画像・方向・檻・発注・記録（Phase 1〜2 前半） |
+| `scripts/make_arm.py`         | 評価の腕の設定を作る。発注はしない                           |
 | `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
 | `tests/`                      | 檻・方向・1周の流れ・`agent.yaml` の不変ルールの検証。外には出ない |
 | `.github/workflows/`          | テスト（`tests.yml`）とセキュリティ点検（`security.yml`）。ナンピノニクスと同じ構成 |
@@ -151,6 +153,21 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 `--dry-run` は発注せず、組み立てた注文だけを出力します。`agent.yaml` の `runtime.dry_run` も
 既定で `true` です。ペーパー口座へ実際に出すかは、人間が 1 周の出力を見てから決めます。
 実資金には、どちらでも影響しません（paper は公開 API しか叩きません）。
+
+### 評価する
+
+ハエの方向がランダムと区別できるかを見ます。過去の足での再実行（replay）はしません。
+`bitbank paper` の約定判定を自前で真似ると、真似が本物とずれた分だけ評価が嘘になるためです。
+代わりに、**方向の出どころだけが違う設定（腕）を並べて同時に走らせます。**
+
+```bash
+python3 scripts/make_arm.py cage-only --source always_approach
+python3 scripts/make_arm.py fly       --source fly
+python3 -m dopabae.evaluate --config arms/fly.yaml --config arms/cage-only.yaml
+```
+
+出るのは方向の頻度と偏り、檻の扱いの内訳、方向のあとの値動き（並べ替え検定つき）、成績です。
+**結論は出しません。** 標本が少ないうちは、その旨を添えて数字だけを返します。
 
 ## 未確認の前提
 

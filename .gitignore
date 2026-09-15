@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 評価の腕の設定（scripts/make_arm.py の生成物。正本は agent.yaml）
+arms/
