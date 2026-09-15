@@ -26,7 +26,7 @@ agent:
   archetype: connectome-approach-avoid # ハエ脳が方向を決め、決定的コード（檻）が数量・上限・諦めを決める型
   phase: design # design | paper | halted
   documents:
-    personality: personality.md # 追加予定
+    personality: personality.md
     strategy: strategy.md # 追加予定（ナンピノニクスから流用）
     risk_policy: risk-policy.md # 追加予定（ナンピノニクスから流用）
     memory_policy: memory-policy.md # 追加予定

@@ -33,6 +33,7 @@
 | 4   | `docs/IMPLEMENTATION_PLAN.md` | 本書                                                   |
 | 5   | `agent.yaml`                  | 型だけ。名前は確定、檻の値はナンピノニクスの値、ハエ脳の値は候補値 |
 | 6   | `.claude/settings.json`       | 禁止コマンド（実取引・paper reset）のハーネス側での二重化 |
+| 7   | `personality.md`              | 性格と話し方。パラメータは実装の数値から導き、偏りは Phase 4 で測るまで空欄 |
 
 檻・シミュレーション・評価はまだ存在しない。
 
