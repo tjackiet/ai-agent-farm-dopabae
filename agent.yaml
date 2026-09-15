@@ -155,9 +155,14 @@ direction:
 # 配線図の選定（要確認）が終わるまで確定しない。
 fly:
   connectome:
+    # 2026-09-15 の調査結果は docs/CONNECTOME_SURVEY.md。まだ選定していない。
     source: null # MaleCNS v1.0 か FlyWire か。要確認。ここでは選定しない
-    license: null # 要確認
-    scope: null # full | mushroom_body（全脳か部分切り出しかは Phase 3 で性能を測ってから決める）
+    license: null # 要確認。調査結果は未検証のまま（同 0・3 章）
+    # 切り出しの範囲。mushroom_body は採れない（視覚入力が KC に届く経路が切れる。同 2.3 章）。
+    scope: null # full | visual_to_descending
+    # シナプス数の閾値。これ未満の結合を落とす。null は閾値なし（Stonkfly と同じ 25.6M）。
+    # **モデルの選択であってデータの性質ではない。** 3 で 10.5M、5 で 6.2M になる（同 2.1 章）。
+    synapse_threshold: null
 
   vision:
     width: 320

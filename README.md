@@ -71,7 +71,8 @@ Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見�
 └── docs/
     ├── REPOSITORY_PLAN.md      # 担当範囲（実装範囲の唯一の正）
     ├── IMPLEMENTATION_PLAN.md  # 実装順序（Phase 1〜6）
-    └── DESIGN_MEMO.md          # 設計メモ（作業指示ではない）
+    ├── DESIGN_MEMO.md          # 設計メモ（作業指示ではない）
+    └── CONNECTOME_SURVEY.md    # 配線図の調査結果（判断材料。一部は未検証）
 ```
 
 | ファイル                      | 役割                                                         |
@@ -91,6 +92,7 @@ Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見�
 | `docs/REPOSITORY_PLAN.md`     | 本リポジトリで実装してよい範囲                               |
 | `docs/IMPLEMENTATION_PLAN.md` | 実装順序。未確認の前提（Python 3.11、C++17、メモリ 16 GB、配線図の選定とライセンス）もここに書く |
 | `docs/DESIGN_MEMO.md`         | この個体の設計メモ。ナンピノニクス側から持ち込んだもの       |
+| `docs/CONNECTOME_SURVEY.md`   | 配線図の調査結果（2026-09-15）。判断材料であり、一部は未検証 |
 | `LICENSE`                     | MIT License                                                  |
 
 ## 構成
@@ -173,7 +175,10 @@ python3 -m dopabae.evaluate --config arms/fly.yaml --config arms/cage-only.yaml
 
 - Stonkfly の環境要件（Python 3.11、C++17 コンパイラ、メモリ 16 GB 推奨）を
   本リポジトリの環境で満たせるかは未確認
-- 配線図のデータソース（MaleCNS v1.0 か FlyWire か）とライセンスは要確認。まだ選定していない
+- 配線図のデータソース（MaleCNS v1.0 か FlyWire か）は 2026-09-15 に調査済み。
+  結果は `docs/CONNECTOME_SURVEY.md`。**まだ選定していない**
+- **ライセンスの記述は未検証。** 作業環境から一次資料へ到達できなかったため、
+  人間が条文を確認するまで Phase 2 後半と Phase 3 に着手しない
 
 ## ライセンス
 

@@ -14,6 +14,7 @@
 | `docs/REPOSITORY_PLAN.md`     | 本リポジトリの担当範囲       | はい（実装範囲の唯一の正）     |
 | `docs/IMPLEMENTATION_PLAN.md` | 実装順序（Phase）           | はい（実装順序の正）           |
 | `docs/DESIGN_MEMO.md`         | この個体の設計メモ           | いいえ（設計の背景。作業指示ではない） |
+| `docs/CONNECTOME_SURVEY.md`   | 配線図の調査結果             | いいえ（判断材料。一部は未検証）       |
 
 1体目のナンピノニクス（`tjackiet/ai-agent-farm-nampinonychus`）は
 **参照するだけで、変更しない。** そちらの文書に書かれた項目を、
