@@ -1,5 +1,7 @@
 # AI Agent Farm — Dopabae
 
+[![tests](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/tests.yml/badge.svg)](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/tests.yml)
+[![security](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/security.yml/badge.svg)](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ドパバエ（Dopabae）は、AIエージェントファームの2体目の試験エージェントです。
@@ -52,7 +54,12 @@
 ├── LICENSE
 ├── agent.yaml              # エージェント定義。数値パラメータとバージョンの唯一の正（型だけ）
 ├── personality.md          # 性格・行動原則・話し方
+├── requirements.txt        # Python の依存。PyYAML のみ
+├── tests/                  # agent.yaml が不変ルールを満たすことの検証
 ├── .claude/settings.json   # 禁止コマンドのハーネス側での二重化
+├── .github/
+│   ├── workflows/          # テストとセキュリティ点検（GitHub Actions）
+│   └── dependabot.yml
 └── docs/
     ├── REPOSITORY_PLAN.md      # 担当範囲（実装範囲の唯一の正）
     ├── IMPLEMENTATION_PLAN.md  # 実装順序（Phase 1〜6）
@@ -64,6 +71,9 @@
 | `CLAUDE.md`                   | 毎回必ず守る不変のルール                                     |
 | `agent.yaml`                  | エージェント定義。**数値パラメータとバージョンの唯一の正**。現在は型だけで、ハエ脳の値は候補値 |
 | `personality.md`              | 性格・行動原則・話し方。売買の判断には使わない               |
+| `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
+| `tests/`                      | `agent.yaml` が `CLAUDE.md` の不変ルールを満たすことの検証。外には出ない |
+| `.github/workflows/`          | テスト（`tests.yml`）とセキュリティ点検（`security.yml`）。ナンピノニクスと同じ構成 |
 | `docs/REPOSITORY_PLAN.md`     | 本リポジトリで実装してよい範囲                               |
 | `docs/IMPLEMENTATION_PLAN.md` | 実装順序。未確認の前提（Python 3.11、C++17、メモリ 16 GB、配線図の選定とライセンス）もここに書く |
 | `docs/DESIGN_MEMO.md`         | この個体の設計メモ。ナンピノニクス側から持ち込んだもの       |
@@ -105,6 +115,18 @@
 - 観測していない値を書かない。秘密情報を残さない
 
 詳細は `CLAUDE.md` を参照してください。
+
+## セットアップ
+
+必要なのは Python 3.11 以上と PyYAML だけです（シミュレーションの依存はまだ入れていません）。
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -t .
+```
+
+テストは外に出ません。`bitbank` も `claude` も呼ばず、資格情報も要りません。
 
 ## 未確認の前提
 

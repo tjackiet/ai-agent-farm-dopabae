@@ -1,0 +1,11 @@
+# Actions の更新だけを見る。
+#
+# Python の依存は今のところ PyYAML のみで、requirements.txt は範囲指定（>=6.0）のため
+# Dependabot が上げるものがない。脆弱性は security.yml の pip-audit で見る。
+# シミュレーション（Phase 3 以降）の依存を足したら、ここも見直す。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
