@@ -102,6 +102,7 @@ class Config:
     timezone: str
     max_runtime_sec: int
     stale_tick_hours: float
+    lock_path: str
 
     cli_command: str
     global_flags: tuple[str, ...]
@@ -253,6 +254,7 @@ def load(path: Path | str | None = None) -> Config:
         timezone=_str(raw, "runtime.timezone"),
         max_runtime_sec=_int(raw, "runtime.max_runtime_sec"),
         stale_tick_hours=_num(raw, "runtime.stale_tick_hours"),
+        lock_path=_str(raw, "runtime.lock_path"),
         cli_command=_str(raw, "cli.command"),
         global_flags=tuple(str(f) for f in flags),
         state_path=_str(raw, "cli.state_path"),

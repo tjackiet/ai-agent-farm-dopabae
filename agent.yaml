@@ -41,6 +41,11 @@ runtime:
   max_runtime_sec: 120 # 1回の判断にかける上限。シミュレーションが収まらなければ部分切り出しへ
   on_error: hold # 例外・不明時は必ず HOLD（発注しない）
   stale_tick_hours: 24
+
+  # 同じ腕の二重起動を防ぐロック。前の回がまだ走っていれば、その回は何もしない。
+  # 腕ごとに分ける（scripts/make_arm.py が書き換える）。分けないと腕が互いを止める。
+  lock_path: var/run.lock
+
   dry_run: true # 発注を組み立てるだけ。paper へ出すかは、実口座で1周を確認してから人間が切り替える
 
 market:

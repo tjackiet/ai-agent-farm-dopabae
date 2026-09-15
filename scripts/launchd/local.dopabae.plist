@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ドパバエの腕を15分ごとにまとめて回す launchd の定義（雛形）。
+  __REPO__ と __PATH__ を置き換えてから ~/Library/LaunchAgents へ置く。
+  手順は README.md「定期実行」を参照。
+
+  呼ぶのは scripts/run_arms.py であって dopabae.run ではない。腕（方向の
+  出どころだけが違う設定）を並行して回すため。腕が1つも無ければ、
+  リポジトリ直下の agent.yaml を1つの腕として回す。
+
+  PATH を明示するのは、launchd の既定の PATH に npm のグローバル配置先が
+  含まれず、bitbank コマンドが見つからないため。bitbank は #!/usr/bin/env node
+  で起動するので、node と同じディレクトリを指すこと。
+
+  fnm / nvm / volta を使っている場合、which bitbank はシェルごとの
+  使い捨てディレクトリを返す。そのまま書くとシェルを閉じた時点で壊れる。
+
+  二重起動は dopabae/lock.py が腕ごとに防ぐ。前の回がまだ走っていれば、
+  その腕はこの回を飛ばす（skipped として要約に出る）。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.dopabae</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/.venv/bin/python</string>
+    <string>__REPO__/scripts/run_arms.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+
+  <!-- 15分ごと。スリープ中は動かず、復帰後に一度だけ実行される。 -->
+  <key>StartInterval</key>
+  <integer>900</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- 腕ごとの記録は var/arms/<腕>/run.log にある。ここに出るのは各回の要約だけ。 -->
+  <key>StandardOutPath</key>
+  <string>__REPO__/var/arms.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/var/arms.err.log</string>
+</dict>
+</plist>
