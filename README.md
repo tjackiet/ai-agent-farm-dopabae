@@ -1,7 +1,7 @@
 # AI Agent Farm — Dopabae
 
-[![tests](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/tests.yml/badge.svg)](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/tests.yml)
-[![security](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/security.yml/badge.svg)](https://github.com/tjackiet/ai-agent-farm-fly/actions/workflows/security.yml)
+[![tests](https://github.com/tjackiet/ai-agent-farm-dopabae/actions/workflows/tests.yml/badge.svg)](https://github.com/tjackiet/ai-agent-farm-dopabae/actions/workflows/tests.yml)
+[![security](https://github.com/tjackiet/ai-agent-farm-dopabae/actions/workflows/security.yml/badge.svg)](https://github.com/tjackiet/ai-agent-farm-dopabae/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ドパバエ（Dopabae）は、AIエージェントファームの2体目の試験エージェントです。
