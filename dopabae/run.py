@@ -15,7 +15,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import cage, cli, config as config_module, direction as direction_module, journal, observe
+from . import cage, cli, config as config_module, direction as direction_module, journal
+from . import lock as lock_module
+from . import observe
 from . import performance as performance_module
 from . import state as state_module
 from . import timeutil, vision as vision_module
@@ -294,9 +296,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         return 1
 
-    now = timeutil.now(cfg.timezone)
-    client = cli.Client(config=cfg)
-    cycle = run_once(cfg, client, now, force_dry_run=args.dry_run)
+    # 二重起動を防ぐ。前の回がまだ走っていれば、この回は何もしない。
+    # 実行しないことによる機会損失は許容し、二重発注は許容しない（CLAUDE.md）。
+    try:
+        with lock_module.hold(config_module.REPO_ROOT / cfg.lock_path) as enforced:
+            if not enforced:
+                print("警告: この環境では二重起動を防げません（fcntl がない）", file=sys.stderr)
+            now = timeutil.now(cfg.timezone)
+            client = cli.Client(config=cfg)
+            cycle = run_once(cfg, client, now, force_dry_run=args.dry_run)
+    except lock_module.AlreadyRunning as exc:
+        # 異常ではない。定期実行が重なっただけなので、終了コードは 0 にする。
+        print(json.dumps({"skipped": True, "reason": str(exc)}, ensure_ascii=False))
+        return 0
     print(json.dumps(cycle.as_dict(), ensure_ascii=False))
     return 0
 

@@ -35,7 +35,7 @@
 | 10  | 評価（ランダム・檻だけとの比較など）           | `dopabae/evaluate.py` / `performance.py` / `scripts/make_arm.py` |
 | 11  | ドーパミンによる KC→MBON の可塑性と報酬        | （実装予定。Phase 5）                         |
 | 12  | 判断ログと運用実績の保存（ハエの反応を含む）   | `dopabae/journal.py` / `dopabae/performance.py` |
-| 13  | 定期実行                                      | （実装予定）                                  |
+| 13  | 定期実行                                      | `scripts/run_arms.py` / `scripts/launchd/` / `scripts/systemd/` / `dopabae/lock.py` |
 | 14  | 記録の言語化（ハエの反応の説明を含む）         | （実装予定）                                  |
 | 15  | キャラクターデザイン定義                      | `character-design.yaml`（追加予定）           |
 | 16  | バージョン別キャラクター画像                  | `character/v{major}/`（追加予定）             |

@@ -57,6 +57,8 @@ def build(raw: dict, name: str, source: str, seed: int | None, weights: dict | N
     arm["agent"]["status_output"] = f"{base}/status.yaml"
     arm["agent"]["performance_output"] = f"{base}/performance.yaml"
     arm["cli"]["state_path"] = f"{base}/paper-state.json"
+    # ロックは腕ごとに分ける。分けないと腕が互いの実行を止める。
+    arm["runtime"]["lock_path"] = f"{base}/run.lock"
     arm["memory"]["root"] = f"{base}/memory/"
     arm["memory"]["decisions"]["path"] = f"{base}/memory/decisions/{{date}}.jsonl"
     arm["memory"]["daily"]["path"] = f"{base}/memory/daily/{{date}}.md"

@@ -61,7 +61,11 @@ Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見�
 ├── memory-policy.md        # 記憶の構造と書き込みルール
 ├── status.yaml             # 状態のスキーマの見本（実行時は var/status.yaml）
 ├── dopabae/                # エージェント本体（Python 3）
-├── scripts/make_arm.py     # 評価の腕（方向の出どころだけが違う設定）を作る
+├── scripts/
+│   ├── make_arm.py         # 評価の腕（方向の出どころだけが違う設定）を作る
+│   ├── run_arms.py         # 腕をまとめて1回ぶん回す（定期実行から呼ぶ）
+│   ├── launchd/            # 15分ごとの定期実行（macOS）
+│   └── systemd/            # 同（Linux。cron の例も）
 ├── requirements.txt        # Python の依存。PyYAML のみ
 ├── tests/                  # agent.yaml が不変ルールを満たすことの検証
 ├── .claude/settings.json   # 禁止コマンドのハーネス側での二重化
@@ -86,6 +90,8 @@ Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見�
 | `status.yaml`                 | 状態のスキーマの見本。実行では書き換えない                   |
 | `dopabae/`                    | エージェント本体。観測・画像・方向・檻・発注・記録（Phase 1〜2 前半） |
 | `scripts/make_arm.py`         | 評価の腕の設定を作る。発注はしない                           |
+| `scripts/run_arms.py`         | 腕をまとめて1回ぶん回す。定期実行から呼ぶ                    |
+| `scripts/launchd/` / `systemd/` | 15分ごとの定期実行の雛形                                   |
 | `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
 | `tests/`                      | 檻・方向・1周の流れ・`agent.yaml` の不変ルールの検証。外には出ない |
 | `.github/workflows/`          | テスト（`tests.yml`）とセキュリティ点検（`security.yml`）。ナンピノニクスと同じ構成 |
@@ -170,6 +176,23 @@ python3 -m dopabae.evaluate --config arms/fly.yaml --config arms/cage-only.yaml
 
 出るのは方向の頻度と偏り、檻の扱いの内訳、方向のあとの値動き（並べ替え検定つき）、成績です。
 **結論は出しません。** 標本が少ないうちは、その旨を添えて数字だけを返します。
+
+### 定期運用する
+
+腕を 15 分ごとにまとめて回します。腕は同じ相場を見る必要があるので、**並行して**起動します。
+
+```bash
+.venv/bin/python scripts/run_arms.py          # arms/*.yaml を全部。無ければ agent.yaml
+```
+
+macOS は `scripts/launchd/local.dopabae.plist` の `__REPO__` と `__PATH__` を置き換えて
+`~/Library/LaunchAgents` へ置きます。Linux は `scripts/systemd/README.md` に cron と
+systemd の例があります。
+
+**二重起動は防がれています。** 前の回がまだ走っている腕は、その回を飛ばします
+（`skipped` として要約に出ます）。実行しないことによる機会損失は許容し、二重発注は許容しません。
+
+各回の要約は `var/arms.log`、腕ごとの詳細は `var/arms/<腕>/run.log` に残ります。
 
 ## 未確認の前提
 
