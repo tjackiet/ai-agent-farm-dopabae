@@ -137,6 +137,7 @@ class Config:
     direction_source: str
     direction_on_failure: str
     direction_random_seed: int | None
+    direction_random_weights: dict[str, float] | None
 
     status_output: str
     performance_output: str
@@ -211,6 +212,21 @@ def load(path: Path | str | None = None) -> Config:
     if not spot_only:
         raise ConfigError("agent.yaml の strategy.spot_only は true でなければなりません（現物のみ）")
 
+    weights_raw = _get(raw, "direction.random_weights")
+    weights: dict[str, float] | None = None
+    if weights_raw is not None:
+        if not isinstance(weights_raw, dict) or not weights_raw:
+            raise ConfigError(f"agent.yaml の direction.random_weights は辞書か null です: {weights_raw!r}")
+        weights = {}
+        for key, value in weights_raw.items():
+            if key not in ("APPROACH", "AVOID", "NONE"):
+                raise ConfigError(f"agent.yaml の direction.random_weights に不明な方向があります: {key}")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                raise ConfigError(f"agent.yaml の direction.random_weights.{key} は 0 以上の数値です: {value!r}")
+            weights[str(key)] = float(value)
+        if sum(weights.values()) <= 0:
+            raise ConfigError("agent.yaml の direction.random_weights の合計が 0 です")
+
     seed_raw = _get(raw, "direction.random_seed")
     if seed_raw is not None and (isinstance(seed_raw, bool) or not isinstance(seed_raw, int)):
         raise ConfigError(f"agent.yaml の direction.random_seed は整数か null です: {seed_raw!r}")
@@ -264,6 +280,7 @@ def load(path: Path | str | None = None) -> Config:
         direction_source=_choice(raw, "direction.source", DIRECTION_SOURCES),
         direction_on_failure=_choice(raw, "direction.on_failure", ON_FAILURE_CHOICES),
         direction_random_seed=seed_raw,
+        direction_random_weights=weights,
         status_output=_str(raw, "agent.status_output"),
         performance_output=_str(raw, "agent.performance_output"),
         decisions_path=_str(raw, "memory.decisions.path"),

@@ -30,6 +30,15 @@ def append(config: Config, now: datetime, record: dict, root: Path | None = None
     return target
 
 
+def recorded_dates(config: Config, root: Path | None = None) -> list[str]:
+    """判断ログが残っている日付を古い順に返す。"""
+    base = root if root is not None else REPO_ROOT
+    directory = (base / config.decisions_path.format(date="x")).parent
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob("*.jsonl"))
+
+
 def read_day(config: Config, date: str, root: Path | None = None) -> list[dict]:
     """その日の判断ログを読む。壊れている行は飛ばす。"""
     base = root if root is not None else REPO_ROOT
@@ -67,6 +76,7 @@ def build_record(
     market: object | None,
     position_amount: float | None,
     avg_cost: float | None,
+    account: dict | None,
     vision: dict | None,
     direction: dict | None,
     cage: str | None,
@@ -87,6 +97,9 @@ def build_record(
         "bid": float(market.bid) if market is not None else None,
         "ask": float(market.ask) if market is not None else None,
         "position": {"amount": position_amount, "avg_cost": avg_cost},
+        # 総資産は観測値（paper assets 由来）。評価（evaluate.py）はここだけを読み、
+        # 現金と建玉から復元しない。観測できなかった回は null。
+        "account": account,
         # ハエに見せた画像のハッシュと足の範囲。描けなかった回は null
         "vision": vision,
         # ハエの答え（観測値）と、檻の扱い（決定的コードの結果）は分けて残す。

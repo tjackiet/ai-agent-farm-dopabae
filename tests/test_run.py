@@ -145,3 +145,21 @@ class VisionCycleTest(CycleTest):
         self.assertTrue(any("画像を描けません" in w for w in cycle.warnings))
         self.assertEqual(cycle.action, "BUY")  # always_approach は画像を見ない
         self.assertIsNone(self.journal()[-1]["vision"])
+
+
+class PerformanceCycleTest(CycleTest):
+    def test_equity_is_recorded_as_an_observation_and_performance_is_written(self):
+        fake = FakeCli(default_responses())
+        cycle = self.run_cycle(fake, force_dry_run=True)
+        record = self.journal()[-1]
+        self.assertEqual(record["account"]["equity_jpy"], 1000000.0)
+        self.assertEqual(record["account"]["cash_jpy"], 1000000.0)
+        document = yaml.safe_load((self.root / "var" / "performance.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(document["observations"], 1)
+        self.assertEqual(document["direction_source"], self.config.direction_source)
+        self.assertTrue(cycle.status_written)
+
+    def test_failed_observation_records_no_account(self):
+        fake = FakeCli(default_responses(), errors={"ticker": "boom"})
+        self.run_cycle(fake)
+        self.assertIsNone(self.journal()[-1]["account"])
