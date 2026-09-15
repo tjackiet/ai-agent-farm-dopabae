@@ -90,6 +90,33 @@ ON_FAILURE_CHOICES = ("hold",)
 PRICE_SOURCES = ("best_bid", "best_ask")
 
 
+# 使わないモデル。料金が上位帯のため、設定に書かれていても受け付けない。
+# 事故で高いモデルが選ばれることを防ぐ。
+FORBIDDEN_MODEL_MARKERS = ("fable", "mythos")
+
+
+def _model(raw: Any, path: str) -> str:
+    value = _str(raw, path)
+    lowered = value.lower()
+    for marker in FORBIDDEN_MODEL_MARKERS:
+        if marker in lowered:
+            raise ConfigError(f"agent.yaml の {path} に {marker} 系のモデルは指定できません: {value}")
+    return value
+
+
+@dataclass(frozen=True)
+class LlmSettings:
+    """LLM の呼びかた。記録の言語化が使う。売買の判断には関与しない。"""
+
+    writer: str
+    command: str
+    bare: bool
+    timeout_sec: int
+    model: str
+    effort: str
+    max_tokens: int
+
+
 @dataclass(frozen=True)
 class Config:
     """agent.yaml の内容。すべて読み取り専用。"""
@@ -145,6 +172,20 @@ class Config:
 
     decisions_path: str
     decisions_read_last_n: int
+    daily_path: str
+    daily_write_at: str
+    daily_read_last_n: int
+
+    # 記録の言語化。売買の判断には関与しない。
+    narrate_enabled: bool
+    narrate_writer: str
+    narrate_command: str
+    narrate_bare: bool
+    narrate_timeout_sec: int
+    narrate_model: str
+    narrate_effort: str
+    narrate_max_tokens: int
+    narrate_targets: dict
 
     # ハエに見せる画像（fly.vision）
     vision_width: int
@@ -287,6 +328,18 @@ def load(path: Path | str | None = None) -> Config:
         performance_output=_str(raw, "agent.performance_output"),
         decisions_path=_str(raw, "memory.decisions.path"),
         decisions_read_last_n=_int(raw, "memory.decisions.read_last_n"),
+        daily_path=_str(raw, "memory.daily.path"),
+        daily_write_at=_str(raw, "memory.daily.write_at"),
+        daily_read_last_n=_int(raw, "memory.daily.read_last_n"),
+        narrate_enabled=_bool(raw, "narrate.enabled"),
+        narrate_writer=_choice(raw, "narrate.writer", ("claude_code", "api")),
+        narrate_command=_str(raw, "narrate.command"),
+        narrate_bare=_bool(raw, "narrate.bare"),
+        narrate_timeout_sec=_int(raw, "narrate.timeout_sec"),
+        narrate_model=_model(raw, "narrate.model"),
+        narrate_effort=_str(raw, "narrate.effort"),
+        narrate_max_tokens=_int(raw, "narrate.max_tokens"),
+        narrate_targets={str(k): bool(v) for k, v in _get(raw, "narrate.targets").items()},
         vision_width=_int(raw, "fly.vision.width"),
         vision_height=_int(raw, "fly.vision.height"),
         vision_candle_type=_str(raw, "fly.vision.candle_type"),
