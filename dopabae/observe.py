@@ -8,13 +8,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from . import timeutil
 from .cli import Client
 from .config import Config
 from .orders import PairSpec, to_decimal
+
+# UTC の日ごとにファイルが分かれる足。境界をまたいでも本数を満たすため、前日ぶんも取る。
+INTRADAY_CANDLE_TYPES = frozenset({"1min", "5min", "15min", "30min", "1hour"})
 
 # 取引所の稼働状態のうち、判断してよいもの。ここに無い値は理由を問わず HOLD。
 TRADABLE_EXCHANGE_STATUS = frozenset({"NORMAL", "BUSY", "VERY_BUSY"})
@@ -92,6 +95,24 @@ def observe_market(client: Client, config: Config, now: datetime) -> Market:
         age_sec=(now - observed_at).total_seconds(),
         source_cmd=response.source.cmd,
     )
+
+
+def observe_candles(client: Client, config: Config, now: datetime) -> list[dict]:
+    """ハエに見せる足を取る。判断（檻）には使わない。"""
+    candle_type = config.vision_candle_type
+    if candle_type in INTRADAY_CANDLE_TYPES:
+        today = now.astimezone(timezone.utc)
+        yesterday = today - timedelta(days=1)
+        response = client.candles(
+            config.pair, candle_type,
+            date_from=yesterday.strftime("%Y%m%d"), date_to=today.strftime("%Y%m%d"),
+        )
+    else:
+        response = client.candles(config.pair, candle_type)
+    candles = response.data
+    if not isinstance(candles, list):
+        raise ValueError("ローソク足の応答が配列ではありません")
+    return candles
 
 
 def observe_pair_spec(client: Client, config: Config) -> PairSpec:

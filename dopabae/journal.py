@@ -67,6 +67,7 @@ def build_record(
     market: object | None,
     position_amount: float | None,
     avg_cost: float | None,
+    vision: dict | None,
     direction: dict | None,
     cage: str | None,
     action: str,
@@ -86,6 +87,8 @@ def build_record(
         "bid": float(market.bid) if market is not None else None,
         "ask": float(market.ask) if market is not None else None,
         "position": {"amount": position_amount, "avg_cost": avg_cost},
+        # ハエに見せた画像のハッシュと足の範囲。描けなかった回は null
+        "vision": vision,
         # ハエの答え（観測値）と、檻の扱い（決定的コードの結果）は分けて残す。
         "direction": direction,
         "cage": cage,

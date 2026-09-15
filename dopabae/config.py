@@ -72,11 +72,11 @@ def _choice(raw: Any, path: str, choices: tuple[str, ...]) -> str:
 # ペーパーで値を試すと、同じ口座に違う設定の結果が並ぶ。どの回がどの設定だったかが
 # 残っていないと、あとの評価（docs/IMPLEMENTATION_PLAN.md Phase 4）が設定違いを
 # 平均した数字を出す。
-FINGERPRINTED = ("strategy", "risk", "direction")
+FINGERPRINTED = ("strategy", "risk", "direction", "fly")
 
 
 def fingerprint(raw: Any) -> str:
-    """`strategy` / `risk` / `direction` の値から8桁の指紋を作る。"""
+    """`strategy` / `risk` / `direction` / `fly` の値から8桁の指紋を作る。"""
     subject = {key: raw.get(key) for key in FINGERPRINTED if isinstance(raw, dict)}
     packed = json.dumps(subject, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(packed.encode("utf-8")).hexdigest()[:8]
@@ -144,7 +144,40 @@ class Config:
     decisions_path: str
     decisions_read_last_n: int
 
+    # ハエに見せる画像（fly.vision）
+    vision_width: int
+    vision_height: int
+    vision_candle_type: str
+    vision_lookback_candles: int
+    vision_show: tuple[str, ...]
+    vision_hide: tuple[str, ...]
+    vision_palette: dict[str, tuple[int, int, int]]
+    vision_margin_px: int
+    vision_text_rows_px: int
+    vision_path: str
+
     raw: dict
+
+
+# ハエに見せてはならないもの。show に入っていたら設定として拒否する（CLAUDE.md）。
+NEVER_SHOWN = ("balance", "pnl", "position")
+PALETTE_KEYS = ("background", "text", "up", "down", "wick", "bid", "ask")
+
+
+def _rgb(raw: Any, path: str) -> tuple[int, int, int]:
+    value = _get(raw, path)
+    if not isinstance(value, list) or len(value) != 3 or any(
+        isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 255 for v in value
+    ):
+        raise ConfigError(f"agent.yaml の {path} は 0〜255 の整数3つです: {value!r}")
+    return (int(value[0]), int(value[1]), int(value[2]))
+
+
+def _str_list(raw: Any, path: str) -> tuple[str, ...]:
+    value = _get(raw, path)
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ConfigError(f"agent.yaml の {path} は文字列の配列です: {value!r}")
+    return tuple(value)
 
 
 def load(path: Path | str | None = None) -> Config:
@@ -181,6 +214,14 @@ def load(path: Path | str | None = None) -> Config:
     seed_raw = _get(raw, "direction.random_seed")
     if seed_raw is not None and (isinstance(seed_raw, bool) or not isinstance(seed_raw, int)):
         raise ConfigError(f"agent.yaml の direction.random_seed は整数か null です: {seed_raw!r}")
+
+    show = _str_list(raw, "fly.vision.show")
+    hide = _str_list(raw, "fly.vision.hide")
+    for item in NEVER_SHOWN:
+        if item in show or item not in hide:
+            raise ConfigError(f"agent.yaml の fly.vision で {item} をハエに見せてはなりません")
+    if _str(raw, "fly.vision.background") != "light":
+        raise ConfigError("agent.yaml の fly.vision.background は light です（暗い背景では KC が発火しない）")
 
     halt = _num(raw, "risk.drawdown.halt_new_buys_pct")
     forced = _num(raw, "risk.drawdown.forced_exit_pct")
@@ -227,5 +268,15 @@ def load(path: Path | str | None = None) -> Config:
         performance_output=_str(raw, "agent.performance_output"),
         decisions_path=_str(raw, "memory.decisions.path"),
         decisions_read_last_n=_int(raw, "memory.decisions.read_last_n"),
+        vision_width=_int(raw, "fly.vision.width"),
+        vision_height=_int(raw, "fly.vision.height"),
+        vision_candle_type=_str(raw, "fly.vision.candle_type"),
+        vision_lookback_candles=_int(raw, "fly.vision.lookback_candles"),
+        vision_show=show,
+        vision_hide=hide,
+        vision_palette={key: _rgb(raw, f"fly.vision.palette.{key}") for key in PALETTE_KEYS},
+        vision_margin_px=_int(raw, "fly.vision.margin_px"),
+        vision_text_rows_px=_int(raw, "fly.vision.text_rows_px"),
+        vision_path=_str(raw, "memory.vision.path"),
         raw=raw,
     )

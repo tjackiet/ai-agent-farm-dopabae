@@ -162,6 +162,18 @@ fly:
     lookback_candles: 8 # 直近2時間。目安は2時間〜1日
     show: [candles, pair, bid, ask]
     hide: [balance, pnl, position] # ハエに「自分の懐」を見せない
+    # 描画に使う色（RGB）。明るい背景に、上昇足は緑、下落足は赤。
+    # R8 は青／緑の代理値を受け取るので、色の選びかたは入力に効く。Phase 2 後半で見直す。
+    palette:
+      background: [245, 245, 245]
+      text: [40, 40, 40]
+      up: [0, 150, 60]
+      down: [200, 40, 40]
+      wick: [90, 90, 90]
+      bid: [30, 90, 200]
+      ask: [200, 120, 30]
+    margin_px: 8 # 枠からの余白
+    text_rows_px: 12 # 上部の文字行（ペア名・気配）に使う高さ
     receptors:
       luminance: [R1, R2, R3, R4, R5, R6] # 線形 sRGB 輝度
       color: [R8] # 青／緑の代理値
@@ -212,6 +224,10 @@ memory:
     write_trigger: position_closed
   weights:
     path: "var/memory/weights/{date}.npz" # シナプス重みのスナップショット。Git 管理外
+  vision:
+    # ハエに見せた画像。人間が「何を見せたか」を確認するために PNG で残す。Git 管理外。
+    # ハッシュと足の範囲は判断ログにも残る。
+    path: "var/memory/vision/{date}/{run_id}.png"
   redact: # 記憶に書き込んではならない値
     - api_key
     - api_secret

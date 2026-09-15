@@ -17,7 +17,7 @@ from typing import Any, Sequence
 
 from . import cage, cli, config as config_module, direction as direction_module, journal, observe
 from . import state as state_module
-from . import timeutil
+from . import timeutil, vision as vision_module
 from .orders import Executor, execute
 
 
@@ -30,6 +30,7 @@ class Cycle:
     state: str
     reason: str
     dry_run: bool
+    vision: dict | None
     direction: dict | None
     cage: str | None
     orders: list[dict[str, Any]]
@@ -45,6 +46,7 @@ class Cycle:
             "state": self.state,
             "reason": self.reason,
             "dry_run": self.dry_run,
+            "vision": self.vision,
             "direction": self.direction,
             "cage": self.cage,
             "orders": self.orders,
@@ -78,6 +80,39 @@ def _observe_account(client: cli.Client, cfg: config_module.Config, now: datetim
     return derived, trades
 
 
+def _see(
+    cfg: config_module.Config,
+    client: cli.Client,
+    market: observe.Market,
+    now: datetime,
+    run_id: str,
+    repo_root: Path | None,
+) -> vision_module.Image | None:
+    """ハエに見せる画像を描いて残す。
+
+    描けなかった回は None を返し、警告に残す。方向の出どころがハエ（Phase 3）なら
+    画像の欠損は方向の失敗として HOLD になるが、対照群（always_approach / random）は
+    画像を見ないので判断は続ける。
+    """
+    try:
+        rows = observe.observe_candles(client, cfg, now)
+        candles = vision_module.select_recent(
+            vision_module.parse_candles(rows), cfg.vision_lookback_candles, int(now.timestamp() * 1000)
+        )
+        image = vision_module.render(cfg, candles, market.bid, market.ask, cfg.pair)
+    except (cli.CliError, vision_module.VisionError, ValueError, KeyError, TypeError) as exc:
+        client.warnings.append(f"画像を描けませんでした: {exc}")
+        return None
+    root = repo_root if repo_root is not None else config_module.REPO_ROOT
+    target = root / cfg.vision_path.format(date=timeutil.date_key(now), run_id=run_id.replace(":", "-"))
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(vision_module.to_png(image))
+    except OSError as exc:
+        client.warnings.append(f"画像を保存できませんでした: {exc}")
+    return image
+
+
 def run_once(
     cfg: config_module.Config,
     client: cli.Client,
@@ -99,10 +134,12 @@ def run_once(
     trades: tuple[state_module.Trade, ...] = ()
     error: str | None = None
     stopped_hours: float | None = None
+    image: vision_module.Image | None = None
     try:
         guards = observe.check_guards(client, cfg)
         market = observe.observe_market(client, cfg, now)
         spec = observe.observe_pair_spec(client, cfg)
+        image = _see(cfg, client, market, now, run_id, repo_root)
         # ペーパー口座に触る前に測る。tick も lazy tick も lastTickAt を進めるため。
         stopped_hours = state_module.stopped_hours(cfg, now, repo_root)
         derived, trades = _observe_account(client, cfg, now, market.last, spec)
@@ -161,6 +198,7 @@ def run_once(
             error = f"発注後の観測に失敗した: {exc}"
 
     direction_dict = resolved.as_dict() if resolved is not None else None
+    vision_dict = image.as_dict() if image is not None else None
     record = journal.build_record(
         run_id=run_id,
         config_version=cfg.version,
@@ -172,6 +210,7 @@ def run_once(
         avg_cost=float(derived.position.avg_cost_jpy)
         if derived and derived.position.avg_cost_jpy is not None
         else None,
+        vision=vision_dict,
         direction=direction_dict,
         cage=decision.cage,
         action=decision.action,
@@ -210,6 +249,7 @@ def run_once(
         state=decision.state,
         reason=decision.reason,
         dry_run=dry_run,
+        vision=vision_dict,
         direction=direction_dict,
         cage=decision.cage,
         orders=order_records,

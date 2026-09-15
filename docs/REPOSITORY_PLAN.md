@@ -29,7 +29,7 @@
 | 4   | 記憶方式                                      | `memory-policy.md` / `dopabae/journal.py`     |
 | 5   | bitbank-lab-cli との接続（paper のみ）        | `dopabae/cli.py` / `dopabae/observe.py`       |
 | 6   | 方向インタフェース（APPROACH / AVOID / NONE）と評価用の出どころ（常時 APPROACH・ランダム） | `dopabae/direction.py` |
-| 7   | チャート画像の描画と光受容細胞へのマッピング   | （実装予定。Phase 2）                         |
+| 7   | チャート画像の描画と光受容細胞へのマッピング   | `dopabae/vision.py`（描画のみ。マッピングは配線図の選定後） |
 | 8   | コネクトーム LIF シミュレーション（重み固定） | （実装予定。Phase 3）                         |
 | 9   | 読み出し（接近側 − 回避側の発火率 → 方向）     | `agent.yaml` の閾値・対象ニューロン（Phase 3） |
 | 10  | 評価（ランダム・檻だけとの比較など）           | （実装予定。Phase 4・6）                      |

@@ -22,6 +22,7 @@
 | 中期     | `var/memory/daily/{date}.md`            | 1日の要約（未実装）            | 無期限 |
 | 長期     | `var/memory/lessons.md`                 | 建玉1回ぶんの学び（未実装）    | 無期限 |
 | 重み     | `var/memory/weights/{date}.npz`         | シナプス重みのスナップショット（Phase 5） | 無期限 |
+| 画像     | `var/memory/vision/{date}/{run_id}.png` | ハエに見せた画像。人間が確認するため     | 無期限 |
 
 `var/` は Git 管理外です。
 
@@ -45,12 +46,13 @@
 
 | キー         | 内容                                                              |
 | ------------ | ----------------------------------------------------------------- |
+| `vision`     | ハエに見せた画像。`sha256` / 大きさ / 足の種類と本数 / 足の範囲（ms）/ 描いたもの。描けなかった回は `null` |
 | `direction`  | ハエの答え。`source` / `value` / `reason` / `error` / `seed`       |
 | `cage`       | 檻がそれをどう扱ったか。`bought` / `sold` / `wall` / `cooldown` / `avoid_flat` / `still` / `no_direction` / `exit` / `recover` / `guard` / `dust` |
 | `bid` / `ask` | 指値を置く根拠になった気配                                        |
-| `config.fingerprint` | 檻と方向の設定の指紋。設定を変えた前後の回を混ぜないため     |
+| `config.fingerprint` | 檻・方向・ハエ（画像を含む）の設定の指紋。設定を変えた前後の回を混ぜないため |
 
-Phase 2 以降で、見せた画像のハッシュと足の範囲、Phase 3 以降で発火数、
+Phase 3 以降で発火数、
 Phase 5 以降でドーパミン刺激と根拠の損益を足します（`docs/DESIGN_MEMO.md` 3.6 節）。
 
 ## 書き込みのルール
