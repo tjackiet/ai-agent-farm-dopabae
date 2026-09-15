@@ -8,6 +8,7 @@
 > （`tjackiet/ai-agent-farm-nampinonychus` の `docs/FLY_AGENT_DESIGN_MEMO.md`）
 > から持ち込んだ下書きであり、持ち込み元は参照のみで変更しない。
 > 本書に書かれていても、`REPOSITORY_PLAN.md` の「扱わないもの」にあるものは実装しない。
+> 本文中の「フライ個体」は、2026-09-15 に「ドパバエ」（Dopabae）と命名された。
 > 参考にした外部プロジェクト：
 > [nftechie/stonkfly](https://github.com/nftechie/stonkfly)（MaleCNS v1.0 を使った試み）。
 

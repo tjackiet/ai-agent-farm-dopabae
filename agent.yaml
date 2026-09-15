@@ -1,10 +1,10 @@
-# ハエ脳エージェント（仮称）エージェント定義
+# ドパバエ エージェント定義
 #
 # このファイルが数値パラメータの唯一の正 (single source of truth) です。
 # 各 .md は「なぜその値なのか」を説明する文書であり、
 # 値が食い違う場合は常に本ファイルを優先します。
 #
-# **本ファイルはまだ型だけです。** 名前は仮称、ハエ脳の値（fly 以下）は
+# **本ファイルはまだ型だけです。** ハエ脳の値（fly 以下）は
 # Stonkfly / 設計メモから写した候補値であり、人間が確認するまで確定しません。
 # 売買本体（strategy / risk）はナンピノニクスの値を Phase 1 で持ち込みます。
 # 型はナンピノニクスの agent.yaml に合わせています。
@@ -17,12 +17,12 @@ schema_version: 1
 version: "0.1"
 
 agent:
-  # 名前は未定。候補は README.md「名前の候補」から人間が選びます。
-  # 決まったら id / name / name_en / tagline を書き換え、パッケージ名も合わせます。
-  id: fly # 仮称
-  name: ハエ脳エージェント（仮称）
-  name_en: Fly Agent (provisional)
-  tagline: 見るだけ。止めるだけ。
+  # 名前は 2026-09-15 に人間が決めた（README.md「名前」）。
+  # 由来：ドパ（ドーパミン。報酬学習で刺激する PAM11 細胞そのもの）＋バエ（ハエ／映え）。
+  id: dopabae
+  name: ドパバエ
+  name_en: Dopabae
+  tagline: ドパが出たことしか覚えない。
   archetype: connectome-veto # ナンピノニクスの売買本体に、ハエ脳の拒否権を足した型
   phase: design # design | paper | halted
   documents:
