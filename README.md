@@ -27,8 +27,9 @@
 
 ## 現在の状態
 
-初期ファイルのみ。檻・シミュレーション・評価はまだありません。
-実装の順序は `docs/IMPLEMENTATION_PLAN.md` を参照してください。
+Phase 1（檻と方向インタフェース）まで実装済み。観測 → 方向 → 檻 → 発注 → 記録が1周します。
+方向の出どころは評価用の「常時 APPROACH」と「ランダム」だけで、ハエ脳（Phase 3）はまだありません。
+実際のペーパー口座ではまだ回していません。実装の順序は `docs/IMPLEMENTATION_PLAN.md` を参照してください。
 
 ## 名前
 
@@ -54,6 +55,11 @@
 ├── LICENSE
 ├── agent.yaml              # エージェント定義。数値パラメータとバージョンの唯一の正（型だけ）
 ├── personality.md          # 性格・行動原則・話し方
+├── strategy.md             # 檻の説明。方向をどう数量・価格・上限・諦めに落とすか
+├── risk-policy.md          # リスク制約。性格と矛盾した場合はこちらが優先
+├── memory-policy.md        # 記憶の構造と書き込みルール
+├── status.yaml             # 状態のスキーマの見本（実行時は var/status.yaml）
+├── dopabae/                # エージェント本体（Python 3）
 ├── requirements.txt        # Python の依存。PyYAML のみ
 ├── tests/                  # agent.yaml が不変ルールを満たすことの検証
 ├── .claude/settings.json   # 禁止コマンドのハーネス側での二重化
@@ -71,8 +77,13 @@
 | `CLAUDE.md`                   | 毎回必ず守る不変のルール                                     |
 | `agent.yaml`                  | エージェント定義。**数値パラメータとバージョンの唯一の正**。現在は型だけで、ハエ脳の値は候補値 |
 | `personality.md`              | 性格・行動原則・話し方。売買の判断には使わない               |
+| `strategy.md`                 | 檻の説明。方向をどう数量・価格・上限・諦めに落とすか         |
+| `risk-policy.md`              | リスク制約。性格と矛盾した場合はこちらが優先                 |
+| `memory-policy.md`            | 記憶の構造と書き込みルール                                   |
+| `status.yaml`                 | 状態のスキーマの見本。実行では書き換えない                   |
+| `dopabae/`                    | エージェント本体。観測・方向・檻・発注・記録（Phase 1）        |
 | `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
-| `tests/`                      | `agent.yaml` が `CLAUDE.md` の不変ルールを満たすことの検証。外には出ない |
+| `tests/`                      | 檻・方向・1周の流れ・`agent.yaml` の不変ルールの検証。外には出ない |
 | `.github/workflows/`          | テスト（`tests.yml`）とセキュリティ点検（`security.yml`）。ナンピノニクスと同じ構成 |
 | `docs/REPOSITORY_PLAN.md`     | 本リポジトリで実装してよい範囲                               |
 | `docs/IMPLEMENTATION_PLAN.md` | 実装順序。未確認の前提（Python 3.11、C++17、メモリ 16 GB、配線図の選定とライセンス）もここに書く |
@@ -127,6 +138,18 @@ python3 -m venv .venv
 ```
 
 テストは外に出ません。`bitbank` も `claude` も呼ばず、資格情報も要りません。
+
+### 1周を実行する
+
+```bash
+npm i -g bitbank-lab-cli
+BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
+.venv/bin/python -m dopabae.run --dry-run
+```
+
+`--dry-run` は発注せず、組み立てた注文だけを出力します。`agent.yaml` の `runtime.dry_run` も
+既定で `true` です。ペーパー口座へ実際に出すかは、人間が 1 周の出力を見てから決めます。
+実資金には、どちらでも影響しません（paper は公開 API しか叩きません）。
 
 ## 未確認の前提
 
