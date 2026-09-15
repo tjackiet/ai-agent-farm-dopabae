@@ -23,7 +23,7 @@ agent:
   name: ドパバエ
   name_en: Dopabae
   tagline: ドパが出たことしか覚えない。
-  archetype: connectome-veto # ナンピノニクスの売買本体に、ハエ脳の拒否権を足した型
+  archetype: connectome-approach-avoid # ハエ脳が方向を決め、決定的コード（檻）が数量・上限・諦めを決める型
   phase: design # design | paper | halted
   documents:
     personality: personality.md # 追加予定
@@ -92,25 +92,61 @@ cli:
 capital:
   initial_jpy: 1000000
 
-# 売買本体。ナンピノニクスの strategy / risk を Phase 1 でそのまま持ち込む。
-# ここには置き場所だけを示す。値を勝手に作らない（観測していない値を書かない）。
-strategy: null # Phase 1 で流用
-risk: null # Phase 1 で流用
+# 檻（決定的コード）。ハエが出した方向を受け取り、数量・価格・上限・諦めを決める。
+# **ハエはこの値に触れない。** 値はナンピノニクスの agent.yaml から持ち込んだ候補値で、
+# Phase 1 で人間が確認する。現物のみ（売りから入る建玉は作らない）。
+strategy:
+  spot_only: true
 
-# 買いを止める権利だけを外部の判定器に渡す（docs/IMPLEMENTATION_PLAN.md Phase 1）。
+  entry:
+    # APPROACH かつ建玉が上限未満かつクールダウン外のとき、固定額の指値を買い気配に置く。
+    order_type: limit
+    price_source: best_bid # 現在の買い気配
+    budget_jpy_per_order: 100000 # 1回の買い金額（固定）
+    max_pending_buy_orders: 1 # 未約定の買い指値は同時に1本まで。次回までに約定しなければ取り消す
+    cooldown_hours_after_fill: 0.5
+    max_fills_per_day: 16
+
+  exit:
+    # AVOID かつ建玉ありのとき、全量を指値で売り気配に置く。
+    # 時間切れ・強制手仕舞いは方向によらず檻が出す。
+    order_type: limit
+    price_source: best_ask # 現在の売り気配
+    sell_ratio: 1.0 # 全量
+    time_stop_days: 3 # 建玉の保有上限。超過で全量手仕舞い
+
+risk:
+  max_position_ratio: 0.80 # 取得原価合計 / 初期資金
+  min_cash_reserve_ratio: 0.10 # 常に残す現金比率
+  per_order_max_jpy: 210000
+
+  drawdown: # 総資産の初期比
+    halt_new_buys_pct: -15.0 # 新規買い停止（AVOID による売りは維持）
+    forced_exit_pct: -25.0 # 全建玉を成行で手仕舞い、停止
+
+  guards:
+    skip_on_circuit_break: true
+    skip_on_exchange_maintenance: true
+    max_data_age_sec: 300 # 5分より古いデータでは判断しない
+    require_price_source: true # 価格は必ず CLI 応答由来
+
+  states: [NOT_INITIALIZED, IDLE, HOLDING, HIBERNATING, HALTED]
+
+# 方向の出どころ（docs/IMPLEMENTATION_PLAN.md Phase 1）。
 #
-# 決定的コードが BUY と決めたあとにだけ通し、止める方向にしか関与させない。
-# 判定器は backend で切り替える。ハエ版（fly）は Phase 3 で追加する。
-veto:
-  enabled: false # 有効にするかどうかは人間が決める
-  backend: always_proceed # always_proceed | llm | fly（Phase 3 で追加）| random（評価用。Phase 4 で追加）
-  on_failure: hold # proceed | hold。シミュレーション失敗・入力欠損も hold
-  read_last_n: 16
+# 方向は APPROACH / AVOID / NONE の三値。出どころは source で切り替える。
+# ハエ版（fly）は Phase 3 で追加する。always_approach と random は評価用の対照群。
+# 返せなかった・読めなかったときは on_failure に従う（既定 hold）。
+direction:
+  source: always_approach # always_approach | random | fly（Phase 3 で追加）
+  on_failure: hold # hold のみ。シミュレーション失敗・入力欠損も hold
+  random_seed: null # source=random のとき。null なら実行ごとに記録して固定する
 
 # ハエ脳。読み出しの閾値・対象ニューロン・神経時間・報酬の閾値はここに置き、
 # **ハエが書き換えない**（CLAUDE.md）。学習で変わるのはシナプス重みだけ。
 #
 # 以下の値は Stonkfly docs/model.md と docs/DESIGN_MEMO.md から写した候補値。
+# ハエは方向しか出さない。数量・上限・諦めは上の strategy / risk（檻）が決める。
 # 配線図の選定（要確認）が終わるまで確定しない。
 fly:
   connectome:
@@ -141,10 +177,13 @@ fly:
     refractory_ms: 2.2
 
   readout:
-    # 「回避側」と定めた指標が閾値を超えたら STOP、それ以外は PROCEED。
+    # 接近の指標 − 回避の指標 の1本の軸。正の閾値超で APPROACH、負の閾値未満で AVOID、間は NONE。
     # 設計者が決めた読み替えであり、「売買を判断する細胞」ではない。
-    neurons: null # Stonkfly の DNp20 / DNpe017 をそのまま使うかは未決（docs/DESIGN_MEMO.md 6 章）
-    stop_threshold_hz: null # 未決。Phase 3 で決め、人間が確認する
+    # 対象ニューロン群は未決（候補は docs/DESIGN_MEMO.md 3.3 節）。配線図の選定後に人間が決める。
+    approach_neurons: null # 接近・定位に関わる下行性ニューロン、接近側 MBON など
+    avoid_neurons: null # 逃避回路（LC4 / LPLC2 → DNp01）、回避側 MBON など
+    approach_threshold_hz: null # 未決。Phase 3 で決め、人間が確認する
+    avoid_threshold_hz: null # 未決。負の値
 
   reward:
     enabled: false # Phase 5 まで無効。学習なしで動かす
