@@ -160,9 +160,14 @@ direction:
 # 配線図の選定（要確認）が終わるまで確定しない。
 fly:
   connectome:
-    # 2026-09-15 の調査結果は docs/CONNECTOME_SURVEY.md。まだ選定していない。
-    source: null # MaleCNS v1.0 か FlyWire か。要確認。ここでは選定しない
-    license: null # 要確認。調査結果は未検証のまま（同 0・3 章）
+    # 2026-09-16 に人間が MaleCNS v1.0 を選定した（docs/CONNECTOME_SURVEY.md 3・6 章）。
+    # ライセンスは同日、権利者側の 5 箇所すべてを一次資料で確認して一致した（同 3.2）。
+    source: malecns_v1_0 # MaleCNS v1.0（雄・脳＋腹髄）。FlyWire は採らない
+    license: CC-BY-4.0 # NC 条項なし。版番号はリンク先からのみ判別できる（同 3.2）
+    # 取得元。トークンを含む URL は置かない（Codex 由来の URL は API トークンを含む。同 3.6）。
+    download_base: gs://flyem-male-cns/v1.0/ # 版がパスに入る。ログイン不要
+    # データはリポジトリに含めない。取得 URL とチェックサムだけを置く（同 3.6）。
+    vendored: false
     # 切り出しの範囲。mushroom_body は採れない（視覚入力が KC に届く経路が切れる。同 2.3 章）。
     scope: null # full | visual_to_descending
     # シナプス数の閾値。これ未満の結合を落とす。null は閾値なし（Stonkfly と同じ 25.6M）。
