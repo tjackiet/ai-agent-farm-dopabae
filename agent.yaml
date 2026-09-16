@@ -160,14 +160,40 @@ direction:
 # 配線図の選定（要確認）が終わるまで確定しない。
 fly:
   connectome:
-    # 2026-09-15 の調査結果は docs/CONNECTOME_SURVEY.md。まだ選定していない。
-    source: null # MaleCNS v1.0 か FlyWire か。要確認。ここでは選定しない
-    license: null # 要確認。調査結果は未検証のまま（同 0・3 章）
+    # 2026-09-16 に人間が MaleCNS v1.0 を選定した（docs/CONNECTOME_SURVEY.md 3・6 章）。
+    # ライセンスは同日、権利者側の 5 箇所すべてを一次資料で確認して一致した（同 3.2）。
+    source: malecns_v1_0 # MaleCNS v1.0（雄・脳＋腹髄）。FlyWire は採らない
+    license: CC-BY-4.0 # NC 条項なし。版番号はリンク先からのみ判別できる（同 3.2）
+    # 取得元。トークンを含む URL は置かない（Codex 由来の URL は API トークンを含む。同 3.6）。
+    download_base: gs://flyem-male-cns/v1.0/ # 版がパスに入る。ログイン不要
+    # データはリポジトリに含めない。取得 URL とチェックサムだけを置く（同 3.6）。
+    vendored: false
     # 切り出しの範囲。mushroom_body は採れない（視覚入力が KC に届く経路が切れる。同 2.3 章）。
     scope: null # full | visual_to_descending
     # シナプス数の閾値。これ未満の結合を落とす。null は閾値なし（Stonkfly と同じ 25.6M）。
     # **モデルの選択であってデータの性質ではない。** 3 で 10.5M、5 で 6.2M になる（同 2.1 章）。
     synapse_threshold: null
+
+  # 画像から光受容細胞への入力（Phase 2 後半）。
+  # **どれも設計者が決めた読み替えであり、生体の視野との一致は検証されていない。**
+  retina:
+    # カラム座標の表（body_id / cell_type / hex1 / hex2 の TSV）。
+    # MaleCNS v1.0 の assignedOlHex1 / assignedOlHex2 から人間が書き出す。
+    # **配線図データはリポジトリに含めない**（docs/CONNECTOME_SURVEY.md 3.6）。
+    column_map_path: var/column_map.tsv # Git 管理外
+    # 受容細胞の型名。**MaleCNS v1.0 の実データとの一致は未検証**（同 3 節 5）。
+    # 表を作った時点で確かめる。1 つも噛み合わなければ入力を作らずに落ちる。
+    luminance_types: [R1, R2, R3, R4, R5, R6, R1-6] # 輝度を受け取る（R1–R6）
+    blue_green_types: [R8, R8p, R8y] # 青／緑の代理値を受け取る（R8）
+    # R8 は個眼ごとに Rh5（青）と Rh6（緑）へ分かれるが、その注釈が MaleCNS に
+    # あるかは未確認。いまは 1 本の代理値にする。blue / green は Phase 4 の腕。
+    r8_channel: blue_green_mean # blue_green_mean | blue | green
+    # 1 個の受容細胞が見る画素の範囲（正方形の一辺）。null は格子の目の粗さから決める。
+    # 1 画素にしない。気配の線が 1 画素の破線なので、点で拾うと運で決まる。
+    field_px: null
+    # 格子を画像へ置く向き。**複眼の視野との対応は未確認。** Phase 4 の腕にできる。
+    flip_x: false
+    flip_y: true # hex2 が増える向きを画像の上にする
 
   vision:
     width: 320

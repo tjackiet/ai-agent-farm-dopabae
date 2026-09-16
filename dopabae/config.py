@@ -199,12 +199,22 @@ class Config:
     vision_text_rows_px: int
     vision_path: str
 
+    retina_column_map_path: str
+    retina_luminance_types: tuple[str, ...]
+    retina_blue_green_types: tuple[str, ...]
+    retina_r8_channel: str
+    retina_field_px: int | None
+    retina_flip_x: bool
+    retina_flip_y: bool
+
     raw: dict
 
 
 # ハエに見せてはならないもの。show に入っていたら設定として拒否する（CLAUDE.md）。
 NEVER_SHOWN = ("balance", "pnl", "position")
 PALETTE_KEYS = ("background", "text", "up", "down", "wick", "bid", "ask")
+# R8 に渡す青／緑の代理値の採りかた。どれも設計者の読み替えである。
+R8_CHANNELS = ("blue_green_mean", "blue", "green")
 
 
 def _rgb(raw: Any, path: str) -> tuple[int, int, int]:
@@ -281,6 +291,23 @@ def load(path: Path | str | None = None) -> Config:
     if _str(raw, "fly.vision.background") != "light":
         raise ConfigError("agent.yaml の fly.vision.background は light です（暗い背景では KC が発火しない）")
 
+    luminance_types = _str_list(raw, "fly.retina.luminance_types")
+    blue_green_types = _str_list(raw, "fly.retina.blue_green_types")
+    if not luminance_types or not blue_green_types:
+        raise ConfigError("agent.yaml の fly.retina の型名が空です")
+    overlap = set(luminance_types) & set(blue_green_types)
+    if overlap:
+        # 同じ型が両方に入っていると、どちらの値を渡したか記録から読めなくなる。
+        raise ConfigError(
+            f"agent.yaml の fly.retina で型が重複しています: {sorted(overlap)}"
+        )
+
+    field_px = _get(raw, "fly.retina.field_px")
+    if field_px is not None:
+        field_px = _int(raw, "fly.retina.field_px")
+        if field_px <= 0:
+            raise ConfigError("agent.yaml の fly.retina.field_px は 1 以上か null です")
+
     halt = _num(raw, "risk.drawdown.halt_new_buys_pct")
     forced = _num(raw, "risk.drawdown.forced_exit_pct")
     if forced >= halt:
@@ -350,5 +377,12 @@ def load(path: Path | str | None = None) -> Config:
         vision_margin_px=_int(raw, "fly.vision.margin_px"),
         vision_text_rows_px=_int(raw, "fly.vision.text_rows_px"),
         vision_path=_str(raw, "memory.vision.path"),
+        retina_column_map_path=_str(raw, "fly.retina.column_map_path"),
+        retina_luminance_types=luminance_types,
+        retina_blue_green_types=blue_green_types,
+        retina_r8_channel=_choice(raw, "fly.retina.r8_channel", R8_CHANNELS),
+        retina_field_px=field_px,
+        retina_flip_x=_bool(raw, "fly.retina.flip_x"),
+        retina_flip_y=_bool(raw, "fly.retina.flip_y"),
         raw=raw,
     )
