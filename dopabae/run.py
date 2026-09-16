@@ -18,8 +18,10 @@ from typing import Any, Sequence
 from . import cage, cli, config as config_module, direction as direction_module, journal
 from . import lock as lock_module
 from . import observe
+from . import narrate as narrate_module
 from . import performance as performance_module
 from . import state as state_module
+from . import summary as summary_module
 from . import timeutil, vision as vision_module
 from .orders import Executor, execute
 
@@ -116,6 +118,28 @@ def _see(
     return image
 
 
+def _narrate(
+    cfg: config_module.Config,
+    repo_root: Path | None,
+    client: cli.Client,
+    narrator: "narrate_module.Writer | None",
+) -> None:
+    """日誌の空欄を埋める。**失敗しても運用は続く**（空欄のまま残るだけ）。
+
+    言語化は記録の文章を書くだけで、売買の判断には関与しない。ここで例外を
+    外へ出すと、文章が書けないだけで発注が止まる。それは割に合わない。
+    """
+    if not cfg.narrate_enabled:
+        return
+    try:
+        writer = narrator or narrate_module.writer_for(cfg)
+        narrate_module.fill_unwritten(cfg, writer, repo_root)
+    except narrate_module.NarrateError as exc:
+        client.warnings.append(f"日誌の本文を書けませんでした: {exc}")
+    except Exception as exc:  # noqa: BLE001 - 言語化の失敗で発注を止めない
+        client.warnings.append(f"日誌の本文を書けませんでした: {type(exc).__name__}")
+
+
 def run_once(
     cfg: config_module.Config,
     client: cli.Client,
@@ -124,8 +148,9 @@ def run_once(
     force_dry_run: bool = False,
     repo_root: Path | None = None,
     resolver=None,
+    narrator=None,
 ) -> Cycle:
-    """1周する。`resolver` は方向の出どころの差し替え口（テスト用）。"""
+    """1周する。`resolver` と `narrator` は差し替え口（テスト用）。"""
     dry_run = cfg.dry_run or force_dry_run
     run_id = timeutil.to_iso(now)
     started = time.monotonic()
@@ -253,12 +278,18 @@ def run_once(
         state_module.write_status(document, root / cfg.status_output)
         status_written = True
 
-        # 実績の集計。判断そのものには影響しないので、失敗しても HOLD にはしない。
-        # 判断ログを書いたあとに読む（この回の記録も集計に含めるため）。
+        # 実績の集計と記録の言語化。**判断そのものには影響しない。**
+        # 失敗しても HOLD にはしない。判断ログを書いたあとに読む
+        # （この回の記録も集計に含めるため）。
         try:
             performance_module.refresh(cfg, now, repo_root)
         except OSError as exc:
             client.warnings.append(f"実績を書けませんでした: {exc}")
+        try:
+            summary_module.ensure(cfg, now, repo_root)
+        except OSError as exc:
+            client.warnings.append(f"日誌を書けませんでした: {exc}")
+        _narrate(cfg, repo_root, client, narrator)
 
     return Cycle(
         run_id=run_id,

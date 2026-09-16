@@ -87,6 +87,7 @@ Phase 1（檻と方向インタフェース）、Phase 2 前半（ハエに見�
 | `strategy.md`                 | 檻の説明。方向をどう数量・価格・上限・諦めに落とすか         |
 | `risk-policy.md`              | リスク制約。性格と矛盾した場合はこちらが優先                 |
 | `memory-policy.md`            | 記憶の構造と書き込みルール                                   |
+| `dopabae/summary.py` / `narrate.py` | 日次サマリと記録の言語化。売買の判断には関与しない      |
 | `status.yaml`                 | 状態のスキーマの見本。実行では書き換えない                   |
 | `dopabae/`                    | エージェント本体。観測・画像・方向・檻・発注・記録（Phase 1〜2 前半） |
 | `scripts/make_arm.py`         | 評価の腕の設定を作る。発注はしない                           |

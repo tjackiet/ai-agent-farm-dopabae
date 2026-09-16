@@ -223,6 +223,40 @@ fly:
     memory_decay_sec: null # Stonkfly は 1,800 秒。運用スケール（日〜週）に伸ばす。未検証
     weight_snapshot_every_n: 96 # 何回の観測ごとに重みを保存するか（15分間隔なら1日）
 
+# 記録の言語化。日誌の「おれの一日」を、ドパバエ自身の言葉で書く。
+#
+# **売買の判断には一切関与しない。** 書くのは記録の文章だけで、発注・取消・HOLD の
+# 決定は決定的なコード（檻）が行う。書けなければ「（未記入）」のまま残り、運用は続く。
+#
+# 数字はハエの言葉に混ぜない（personality.md「数字の扱い」）。観測は日誌の別の節へ
+# 判断ログからそのまま転記する。
+#
+# ナンピノニクスにある「学び」は作らない。ドパバエは反省も計画もしないし、
+# 学習が起きるのはシナプス重みだけである（CLAUDE.md）。
+narrate:
+  enabled: true
+
+  # claude_code = Claude Code CLI を非対話で呼ぶ（claude -p）
+  # api        = Anthropic API を直接呼ぶ（別途 pip install anthropic）
+  writer: claude_code
+  command: claude
+  timeout_sec: 120
+
+  # writer=claude_code のとき --bare を付けるか。
+  #
+  # false: Claude Code のログイン（サブスクリプション）をそのまま使える。ただし
+  #        CLAUDE.md・フック・MCP を毎回読み込むため重く、フックも発火する。
+  # true : 起動が軽く副作用もないが、**サブスクリプションを使わない**。
+  #        ANTHROPIC_API_KEY が必須になり、API クレジットから引かれる。
+  bare: false
+
+  # Fable / Mythos 系は使わない（料金が上位帯のため）。config.py が弾く。
+  model: claude-sonnet-5
+  effort: high # low | medium | high | xhigh | max
+  max_tokens: 500 # writer=api のときだけ使う
+  targets:
+    daily: true # 日誌の本文
+
 memory:
   root: var/memory/
   decisions:

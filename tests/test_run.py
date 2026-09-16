@@ -163,3 +163,47 @@ class PerformanceCycleTest(CycleTest):
         fake = FakeCli(default_responses(), errors={"ticker": "boom"})
         self.run_cycle(fake)
         self.assertIsNone(self.journal()[-1]["account"])
+
+
+class NarrateCycleTest(CycleTest):
+    """言語化は記録の文章を書くだけ。失敗しても発注は止まらない。"""
+
+    def put_diary(self):
+        """空欄のある日誌を置く。これが無いと書き手は呼ばれない。"""
+        from dopabae import summary
+
+        directory = self.root / "var" / "memory" / "daily"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "2026-09-14.md"
+        path.write_text(f"# 2026-09-14\n\n## おれの一日\n\n{summary.UNWRITTEN}\n", encoding="utf-8")
+        return path
+
+    def test_a_failing_narrator_only_warns(self):
+        self.put_diary()
+
+        def broken(system, user):
+            raise RuntimeError("boom")
+
+        cycle = self.run_cycle(FakeCli(default_responses()), force_dry_run=True, narrator=broken)
+        self.assertEqual(cycle.action, "BUY")  # 判断は通っている
+        self.assertIsNone(cycle.error)
+        self.assertTrue(any("日誌の本文を書けません" in w for w in cycle.warnings))
+
+    def test_a_working_narrator_fills_the_diary(self):
+        path = self.put_diary()
+        cycle = self.run_cycle(
+            FakeCli(default_responses()), force_dry_run=True,
+            narrator=lambda s, u: "近づいた。もっかい。",
+        )
+        self.assertEqual(cycle.action, "BUY")
+        self.assertIn("近づいた。もっかい。", path.read_text(encoding="utf-8"))
+
+    def test_the_narrator_is_not_called_when_there_is_no_diary(self):
+        """その日が終わるまで日誌は作られない。書くものが無ければ呼ばない。"""
+        calls = []
+        cycle = self.run_cycle(
+            FakeCli(default_responses()), force_dry_run=True,
+            narrator=lambda s, u: calls.append(u) or "近づいた。",
+        )
+        self.assertEqual(cycle.action, "BUY")
+        self.assertEqual(calls, [])
