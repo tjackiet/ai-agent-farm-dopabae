@@ -57,3 +57,54 @@ class ConfigTest(unittest.TestCase):
         a = config_module.fingerprint(self.raw)
         raw = dict(self.raw); raw["risk"] = dict(raw["risk"]); raw["risk"]["per_order_max_jpy"] = 1
         self.assertNotEqual(a, config_module.fingerprint(raw))
+
+
+class ConnectomeConfigTest(unittest.TestCase):
+    """配線図の取得元と指紋。トークン入りの URL と指紋の無いファイルを通さない。"""
+
+    def setUp(self):
+        self.raw = config_module.load().raw
+
+    def with_connectome(self, **changes) -> dict:
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        node = raw["fly"]["connectome"]
+        for dotted, value in changes.items():
+            target = node
+            keys = dotted.split("__")
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = value
+        return raw
+
+    def test_loads_manifest(self):
+        cfg = config_module.load()
+        self.assertEqual(set(cfg.connectome_files), set(config_module.CONNECTOME_FILE_KEYS))
+        for item in cfg.connectome_files.values():
+            self.assertEqual(len(item.sha256), 64)
+            self.assertGreater(item.size_bytes, 0)
+        self.assertTrue(cfg.connectome_download_base.endswith("/"))
+
+    def test_rejects_url_with_token(self):
+        """Codex 由来の URL は API トークンを含む（docs/CONNECTOME_SURVEY.md 3.6）。"""
+        raw = self.with_connectome(download_base="https://example.org/data?api_token=secret")
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_malformed_sha256(self):
+        raw = self.with_connectome(files__weights__sha256="abc")
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_path_outside_download_base(self):
+        for bad in ("/etc/passwd", "../other/file.feather"):
+            raw = self.with_connectome(files__annotations__path=bad)
+            with self.assertRaises(config_module.ConfigError, msg=bad):
+                config_module.load(write(raw))
+
+    def test_rejects_missing_file_entry(self):
+        raw = self.with_connectome()
+        del raw["fly"]["connectome"]["files"]["weights"]
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))

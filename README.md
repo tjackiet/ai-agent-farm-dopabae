@@ -65,9 +65,13 @@ Phase 4 の評価基盤まで実装済み。
 ├── scripts/
 │   ├── make_arm.py         # 評価の腕（方向の出どころだけが違う設定）を作る
 │   ├── run_arms.py         # 腕をまとめて1回ぶん回す（定期実行から呼ぶ）
+│   ├── fetch_connectome.py # 配線図データを取得する（指紋が合わなければ置かない）
+│   ├── export_column_map.py # 光受容細胞のカラム座標表を書き出す
+│   ├── check_column_map.py # 座標表を点検する（読んで数えるだけ）
 │   ├── launchd/            # 15分ごとの定期実行（macOS）
 │   └── systemd/            # 同（Linux。cron の例も）
 ├── requirements.txt        # Python の依存。PyYAML のみ
+├── requirements-connectome.txt # 配線図の下ごしらえだけが使う依存（pyarrow）
 ├── tests/                  # agent.yaml が不変ルールを満たすことの検証
 ├── .claude/settings.json   # 禁止コマンドのハーネス側での二重化
 ├── .github/
@@ -93,8 +97,10 @@ Phase 4 の評価基盤まで実装済み。
 | `dopabae/`                    | エージェント本体。観測・画像・マッピング・方向・檻・発注・記録（Phase 1〜2） |
 | `scripts/make_arm.py`         | 評価の腕の設定を作る。発注はしない                           |
 | `scripts/run_arms.py`         | 腕をまとめて1回ぶん回す。定期実行から呼ぶ                    |
+| `scripts/fetch_connectome.py` / `export_column_map.py` / `check_column_map.py` | 配線図データの取得、光受容細胞の座標表の書き出しと点検。データと表は Git 管理外 |
 | `scripts/launchd/` / `systemd/` | 15分ごとの定期実行の雛形                                   |
 | `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
+| `requirements-connectome.txt` | 配線図の下ごしらえだけが使う依存（pyarrow）。定期実行とテストには要らない |
 | `tests/`                      | 檻・方向・1周の流れ・`agent.yaml` の不変ルールの検証。外には出ない |
 | `.github/workflows/`          | テスト（`tests.yml`）とセキュリティ点検（`security.yml`）。ナンピノニクスと同じ構成 |
 | `docs/REPOSITORY_PLAN.md`     | 本リポジトリで実装してよい範囲                               |
@@ -164,6 +170,22 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 `--dry-run` は発注せず、組み立てた注文だけを出力します。`agent.yaml` の `runtime.dry_run` も
 既定で `true` です。ペーパー口座へ実際に出すかは、人間が 1 周の出力を見てから決めます。
 実資金には、どちらでも影響しません（paper は公開 API しか叩きません）。
+
+### 配線図を用意する
+
+ハエ版（Phase 3）が使う配線図は MaleCNS v1.0 です。データはリポジトリに含めず、
+`agent.yaml` の `fly.connectome` に取得元と SHA-256 だけを置いています。
+
+```bash
+.venv/bin/pip install -r requirements-connectome.txt   # pyarrow
+.venv/bin/python scripts/fetch_connectome.py           # 約 1 GB を var/connectome/ へ
+.venv/bin/python scripts/export_column_map.py          # var/column_map.tsv を書く
+.venv/bin/python scripts/check_column_map.py           # 型名・座標の欠け・1 個が見る範囲
+```
+
+光受容細胞そのものはカラム座標を持たないので、出力シナプスの行き先（L1・Mi1 など）の
+カラムから決めます。決められない細胞には値を作りません。詳しくは
+`docs/IMPLEMENTATION_PLAN.md` の Phase 2「座標表の作りかた」にあります。
 
 ### 評価する
 
