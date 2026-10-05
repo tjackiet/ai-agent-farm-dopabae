@@ -2,6 +2,6 @@
 # テストは標準ライブラリの unittest のみ。
 PyYAML>=6.0
 
-# コネクトームのシミュレーション（Phase 3 以降）の依存はまだ入れていない。
-# Stonkfly の環境要件（Python 3.11 / C++17 / メモリ 16 GB）は未確認の前提
-# （docs/IMPLEMENTATION_PLAN.md 3 節）。確認できてから足す。
+# 配線図とシミュレーションの依存（pyarrow / numpy）は requirements-connectome.txt に分けた。
+# C++ のコンパイラは要らない（シミュレーションは numpy だけで書いた。
+# docs/IMPLEMENTATION_PLAN.md 3 節 1）。

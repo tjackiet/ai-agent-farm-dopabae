@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dopabae.config import REPO_ROOT, ConnectomeFile, load  # noqa: E402
+from dopabae.connectome import sha256_of  # noqa: E402
 
 GCS_HTTPS = "https://storage.googleapis.com/"
 CHUNK = 1 << 20
@@ -48,14 +49,6 @@ def https_url(download_base: str, path: str) -> str:
     if not base.startswith("https://"):
         raise FetchError(f"扱えない取得元です: {download_base}")
     return base + urllib.parse.quote(path)
-
-
-def sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(CHUNK), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def matches(path: Path, expected: ConnectomeFile) -> bool:

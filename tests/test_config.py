@@ -103,6 +103,33 @@ class ConnectomeConfigTest(unittest.TestCase):
             with self.assertRaises(config_module.ConfigError, msg=bad):
                 config_module.load(write(raw))
 
+    def test_simulation_values_are_loaded(self):
+        sim = config_module.load().simulation
+        self.assertLess(sim.resting_mv, sim.threshold_mv)
+        self.assertIn("histamine", sim.inhibitory_transmitters)
+
+    def test_rejects_equal_time_constants(self):
+        """厳密解の式が 0 除算になる。"""
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["simulation"]["synaptic_tau_ms"] = raw["fly"]["simulation"]["membrane_tau_ms"]
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_threshold_below_rest(self):
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["simulation"]["threshold_mv"] = -60
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_zero_synapse_threshold(self):
+        raw = self.with_connectome(synapse_threshold=0)
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
     def test_rejects_missing_file_entry(self):
         raw = self.with_connectome()
         del raw["fly"]["connectome"]["files"]["weights"]

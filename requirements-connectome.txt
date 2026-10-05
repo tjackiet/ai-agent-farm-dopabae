@@ -1,5 +1,8 @@
-# 配線図データの下ごしらえ（scripts/export_column_map.py）だけが使う依存。
-# 定期実行の 1 周とテストには要らないので requirements.txt から分けてある。
+# 配線図とシミュレーションの依存（Phase 3）。
+# scripts/export_column_map.py・scripts/bench_simulation.py・dopabae/connectome.py・
+# dopabae/lif.py が使う。定期実行の 1 周（対照群の腕）には要らないので
+# requirements.txt から分けてある。テスト（CI）は両方を入れて回す。
 # MaleCNS v1.0 の flat-connectome は Arrow IPC（feather）形式で配られている。
 PyYAML>=6.0
 pyarrow>=17.0
+numpy>=1.26

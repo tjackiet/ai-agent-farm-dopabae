@@ -130,6 +130,25 @@ class ConnectomeFile:
 
 
 @dataclass(frozen=True)
+class SimulationSettings:
+    """LIF の値（fly.simulation）。どれも候補値で、人間が確認するまで確定しない。"""
+
+    dt_ms: float
+    neural_time_sec: float
+    membrane_tau_ms: float
+    synaptic_tau_ms: float
+    resting_mv: float
+    reset_mv: float
+    threshold_mv: float
+    delay_ms: float
+    refractory_ms: float
+    weight_per_synapse_mv: float
+    neuron_status: tuple[str, ...]
+    transmitter_column: str
+    inhibitory_transmitters: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Config:
     """agent.yaml の内容。すべて読み取り専用。"""
 
@@ -216,6 +235,8 @@ class Config:
     connectome_download_base: str
     connectome_local_dir: str
     connectome_files: dict[str, ConnectomeFile]
+    connectome_synapse_threshold: int | None
+    simulation: SimulationSettings
 
     retina_column_map_path: str
     retina_luminance_types: tuple[str, ...]
@@ -235,7 +256,7 @@ PALETTE_KEYS = ("background", "text", "up", "down", "wick", "bid", "ask")
 R8_CHANNELS = ("blue_green_mean", "blue", "green")
 
 # 配線図から読むファイル。どれも欠けてはならない。
-CONNECTOME_FILE_KEYS = ("annotations", "weights")
+CONNECTOME_FILE_KEYS = ("annotations", "weights", "neurotransmitters")
 
 
 def _connectome_files(raw: Any) -> dict[str, ConnectomeFile]:
@@ -257,6 +278,56 @@ def _connectome_files(raw: Any) -> dict[str, ConnectomeFile]:
             raise ConfigError(f"agent.yaml の {base}.size_bytes は 1 以上です")
         parsed[key] = ConnectomeFile(path=path, sha256=digest, size_bytes=size)
     return parsed
+
+
+def _synapse_threshold(raw: Any) -> int | None:
+    """null は閾値なし。数えるのはシナプス数なので 1 以上の整数。"""
+    if _get(raw, "fly.connectome.synapse_threshold") is None:
+        return None
+    value = _int(raw, "fly.connectome.synapse_threshold")
+    if value < 1:
+        raise ConfigError("agent.yaml の fly.connectome.synapse_threshold は 1 以上か null です")
+    return value
+
+
+def _simulation(raw: Any) -> SimulationSettings:
+    _choice(raw, "fly.simulation.model", ("lif",))
+    base = "fly.simulation"
+    settings = SimulationSettings(
+        dt_ms=_num(raw, f"{base}.dt_ms"),
+        neural_time_sec=_num(raw, f"{base}.neural_time_per_observation_sec"),
+        membrane_tau_ms=_num(raw, f"{base}.membrane_tau_ms"),
+        synaptic_tau_ms=_num(raw, f"{base}.synaptic_tau_ms"),
+        resting_mv=_num(raw, f"{base}.resting_mv"),
+        reset_mv=_num(raw, f"{base}.reset_mv"),
+        threshold_mv=_num(raw, f"{base}.threshold_mv"),
+        delay_ms=_num(raw, f"{base}.transmission_delay_ms"),
+        refractory_ms=_num(raw, f"{base}.refractory_ms"),
+        weight_per_synapse_mv=_num(raw, f"{base}.weight_per_synapse_mv"),
+        neuron_status=_str_list(raw, f"{base}.neuron_status"),
+        transmitter_column=_str(raw, f"{base}.transmitter_column"),
+        inhibitory_transmitters=_str_list(raw, f"{base}.inhibitory_transmitters"),
+    )
+    positive = {
+        "dt_ms": settings.dt_ms,
+        "neural_time_per_observation_sec": settings.neural_time_sec,
+        "membrane_tau_ms": settings.membrane_tau_ms,
+        "synaptic_tau_ms": settings.synaptic_tau_ms,
+        "weight_per_synapse_mv": settings.weight_per_synapse_mv,
+    }
+    for name, value in positive.items():
+        if value <= 0:
+            raise ConfigError(f"agent.yaml の {base}.{name} は正の値です")
+    if settings.membrane_tau_ms == settings.synaptic_tau_ms:
+        # 厳密解の式が 0 除算になる。等しい場合の式は別に要るが、いまは使わない。
+        raise ConfigError(f"agent.yaml の {base} で membrane_tau_ms と synaptic_tau_ms が等しい")
+    if settings.delay_ms < settings.dt_ms or settings.refractory_ms < 0:
+        raise ConfigError(f"agent.yaml の {base} の遅延は dt 以上、不応期は 0 以上です")
+    if not settings.resting_mv < settings.threshold_mv or not settings.reset_mv < settings.threshold_mv:
+        raise ConfigError(f"agent.yaml の {base} で静止電位とリセット電位は閾値より低くなければなりません")
+    if not settings.neuron_status:
+        raise ConfigError(f"agent.yaml の {base}.neuron_status が空です")
+    return settings
 
 
 def _download_base(raw: Any) -> str:
@@ -434,6 +505,8 @@ def load(path: Path | str | None = None) -> Config:
         connectome_download_base=_download_base(raw),
         connectome_local_dir=_str(raw, "fly.connectome.local_dir"),
         connectome_files=_connectome_files(raw),
+        connectome_synapse_threshold=_synapse_threshold(raw),
+        simulation=_simulation(raw),
         retina_column_map_path=_str(raw, "fly.retina.column_map_path"),
         retina_luminance_types=luminance_types,
         retina_blue_green_types=blue_green_types,

@@ -182,6 +182,10 @@ fly:
         path: connectome-data/flat-connectome/connectome-weights-male-cns-v1.0-minconf-0.5.feather
         sha256: e35da783d1c686b2b58b3b87cd6a403ae43bfcfba8bff28e08ef752c1a56afc1
         size_bytes: 1051241946
+      neurotransmitters: # 細胞ごとの伝達物質の予測（符号を決める）
+        path: connectome-data/flat-connectome/body-neurotransmitters-male-cns-v1.0.feather
+        sha256: 95c9289220663abeb3409f3ad9e5a7f8a53f8093f5139d15502cd08da8879621
+        size_bytes: 43282834
     # 切り出しの範囲。mushroom_body は採れない（視覚入力が KC に届く経路が切れる。同 2.3 章）。
     scope: null # full | visual_to_descending
     # シナプス数の閾値。これ未満の結合を落とす。null は閾値なし（Stonkfly と同じ 25.6M）。
@@ -240,15 +244,28 @@ fly:
       luminance: [R1, R2, R3, R4, R5, R6] # 線形 sRGB 輝度
       color: [R8] # 青／緑の代理値
 
+  # LIF の値。Shiu ら (2024) を Stonkfly が再利用した値（docs/CONNECTOME_SURVEY.md 5 章）。
+  # **どれも候補値。** 2026-10-05 の計算時間の計測に使った（docs/IMPLEMENTATION_PLAN.md 3 節 2）。
   simulation:
     model: lif
     dt_ms: 0.1
     neural_time_per_observation_sec: 0.5
     membrane_tau_ms: 20
     synaptic_tau_ms: 5
+    resting_mv: -52 # 静止電位
+    reset_mv: -52 # 発火したあとに戻す電位
     threshold_mv: -45
     transmission_delay_ms: 1.8
     refractory_ms: 2.2
+    weight_per_synapse_mv: 0.275 # シナプス 1 個あたり。結合の重みはシナプス数 × これ
+    # 網に入れる細胞。status が Traced の細胞（2.1 の 25.6M 結合を再現する集合）に、
+    # fly.retina で入力を受け取る型を status によらず足す（R1-R6 の 6 割は status が空のため）。
+    neuron_status: [Traced]
+    # 結合の符号。伝達物質の列と、抑制として扱う物質。それ以外は興奮として扱う
+    # （Stonkfly と同じ。解決できない・ドーパミンなども興奮。同 1 章）。
+    # **光受容細胞はヒスタミンなので抑制になる。** 静止発火率の扱い（同 6 章）は未決。
+    transmitter_column: consensus_nt
+    inhibitory_transmitters: [gaba, glutamate, histamine]
 
   readout:
     # 接近の指標 − 回避の指標 の1本の軸。正の閾値超で APPROACH、負の閾値未満で AVOID、間は NONE。
