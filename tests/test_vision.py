@@ -16,6 +16,47 @@ def candles(count: int = 8) -> tuple[vision.Candle, ...]:
     return vision.select_recent(vision.parse_candles(helpers.candles(count=count + 4)), count, helpers.NOW_MS)
 
 
+
+class GuideLineTest(unittest.TestCase):
+    """気配の線。重なっても青が消えないこと（Phase 2 後半の決定）。"""
+
+    def setUp(self):
+        self.cfg = helpers.load_config()
+        self.bid = self.cfg.vision_palette["bid"]
+        self.ask = self.cfg.vision_palette["ask"]
+
+    def colors(self, image: vision.Image) -> set[tuple[int, int, int]]:
+        return {
+            tuple(image.pixels[i : i + 3])
+            for i in range(0, len(image.pixels), 3)
+        }
+
+    def test_separate_lines_keep_both_colors(self):
+        image = vision.render(self.cfg, candles(), Decimal(14600000), Decimal(14800000), "btc_jpy")
+        found = self.colors(image)
+        self.assertIn(self.bid, found)
+        self.assertIn(self.ask, found)
+
+    def test_overlapping_lines_are_mixed(self):
+        """スプレッド 1 円。同じ行に落ちても、青の寄与が残ること。"""
+        image = vision.render(self.cfg, candles(), Decimal(14699999), Decimal(14700000), "btc_jpy")
+        found = self.colors(image)
+        mixed = vision._mix(self.bid, self.ask)
+        self.assertIn(mixed, found)
+        # 片方だけが生き残ってはいない。
+        self.assertNotIn(self.bid, found)
+        self.assertNotIn(self.ask, found)
+        # 混色は両方の青を引き継いでいる。R8 が受け取る青が消えていない。
+        self.assertGreater(mixed[2], min(self.bid[2], self.ask[2]))
+
+    def test_mix_is_order_independent(self):
+        self.assertEqual(vision._mix(self.bid, self.ask), vision._mix(self.ask, self.bid))
+
+    def test_no_new_color_when_lines_are_apart(self):
+        image = vision.render(self.cfg, candles(), Decimal(14600000), Decimal(14800000), "btc_jpy")
+        self.assertNotIn(vision._mix(self.bid, self.ask), self.colors(image))
+
+
 class VisionTest(unittest.TestCase):
     def setUp(self):
         self.cfg = helpers.load_config()

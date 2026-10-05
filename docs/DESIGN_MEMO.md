@@ -88,9 +88,9 @@ CLAUDE.md の不変ルール（ペーパーのみ、迷ったら HOLD、値を�
 
 - ニューロンモデル：LIF。パラメータは Stonkfly / Shiu ら (2024) を初期値にする
 - 観測ごとに神経時間 0.5 秒。15分間隔なら計算時間は問題にならない
-- 配線図：MaleCNS v1.0（Stonkfly と同じ）か FlyWire。**要確認**。
-  2026-09-15 に調査した結果は [`CONNECTOME_SURVEY.md`](CONNECTOME_SURVEY.md) にある。
-  選定は人間が行う
+- 配線図：**MaleCNS v1.0**（Stonkfly と同じ）。2026-09-16 に人間が選定し、
+  ライセンスも同日 CC BY 4.0 と一次確認した
+  （[`CONNECTOME_SURVEY.md`](CONNECTOME_SURVEY.md) 3.2・6.3）
 - エッジ数は**シナプス数の閾値で桁が動く**（閾値なしで 25.6M、3 以上で 10.5M、
   5 以上で 6.2M）。閾値はモデルの選択であってデータの性質ではない。決めたら
   `agent.yaml` に置く

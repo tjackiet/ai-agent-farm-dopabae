@@ -184,6 +184,11 @@ def select_recent(candles: Sequence[Candle], count: int, now_ms: int) -> tuple[C
     return tuple(recent)
 
 
+def _mix(a: RGB, b: RGB) -> RGB:
+    """2 色の平均。重なった画素に使う。切り捨てなので決定的である。"""
+    return ((a[0] + b[0]) // 2, (a[1] + b[1]) // 2, (a[2] + b[2]) // 2)
+
+
 def render(config: Config, candles: Sequence[Candle], bid: Decimal, ask: Decimal, pair: str) -> Image:
     """チャート・ペア名・気配だけを描く。残高・損益・建玉は引数にも取らない。"""
     if not candles:
@@ -242,10 +247,23 @@ def render(config: Config, candles: Sequence[Candle], bid: Decimal, ask: Decimal
             canvas.rect(x_center - half, y0, x_center - half + body_w - 1, y1, color)
         shown.append("candles")
 
-    if "bid" in config.vision_show:
-        canvas.hline(left, right, y_of(bid), palette["bid"], dotted=4)
-    if "ask" in config.vision_show:
-        canvas.hline(left, right, y_of(ask), palette["ask"], dotted=4)
+    # 気配の線。**重なった行は両方の色を混ぜる**（Phase 2 後半の決定）。
+    # スプレッドが 1 円だと両方が同じ画素の行に落ちる。あとから描いたほうで
+    # 上書きすると、買い気配の青が毎回消える。R8 は青と緑を受け取る担当なので、
+    # 消えた青は入力そのものの欠落になる。1 画素ずらす案は、その解像度に無い差を
+    # 描くことになるので採らない。**同じ場所を 2 本が占めているなら、そこから届く
+    # 光は 2 色の混合である。** 混ぜれば青の寄与は比例して残り、スプレッドに対して
+    # 跳ばずに変わる。
+    draw_bid = "bid" in config.vision_show
+    draw_ask = "ask" in config.vision_show
+    y_bid, y_ask = y_of(bid), y_of(ask)
+    if draw_bid and draw_ask and y_bid == y_ask:
+        canvas.hline(left, right, y_bid, _mix(palette["bid"], palette["ask"]), dotted=4)
+    else:
+        if draw_bid:
+            canvas.hline(left, right, y_bid, palette["bid"], dotted=4)
+        if draw_ask:
+            canvas.hline(left, right, y_ask, palette["ask"], dotted=4)
 
     pixels = bytes(canvas.buf)
     return Image(
