@@ -78,6 +78,7 @@ class HexCell:
     side: str
     hex1: int
     hex2: int
+    cell_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,17 +116,25 @@ def assign(
     receptors: Mapping[int, Receptor],
     hex_cells: Mapping[int, HexCell],
     edges: Iterable[tuple[int, int, int]],
+    anchors: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[list[Assignment], int]:
     """光受容細胞ごとに、出力シナプスがいちばん多く行くカラムを選ぶ。
 
+    `anchors` に型が載っている光受容細胞は、そこに挙げた型の標的だけを数える
+    （Stonkfly は R1-R6 を L1・L2・L3 だけで決める）。載っていなければ座標を持つ全標的。
+
     返すのは body_id 順の割り当てと、反対側の標的へ行ったため数えなかったシナプス数。
     """
+    anchors = anchors or {}
     per_column: dict[int, Counter[tuple[int, int]]] = defaultdict(Counter)
     cross_side = 0
     for pre, post, weight in edges:
         receptor = receptors.get(pre)
         target = hex_cells.get(post)
         if receptor is None or target is None or weight <= 0 or receptor.side is None:
+            continue
+        allowed = anchors.get(receptor.cell_type)
+        if allowed is not None and target.cell_type not in allowed:
             continue
         if target.side != receptor.side:
             cross_side += weight
@@ -168,7 +177,8 @@ def render_tsv(assignments: Iterable[Assignment]) -> bytes:
     for a in assignments:
         hex1 = "null" if a.hex1 is None else str(a.hex1)
         hex2 = "null" if a.hex2 is None else str(a.hex2)
-        lines.append(f"{a.body_id}\t{a.cell_type}\t{hex1}\t{hex2}")
+        side = "null" if a.side is None else a.side
+        lines.append(f"{a.body_id}\t{a.cell_type}\t{hex1}\t{hex2}\t{side}")
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
@@ -207,7 +217,9 @@ def read_inputs(
         hex1, hex2 = row["assignedOlHex1"], row["assignedOlHex2"]
         side = side_of(row["instance"])
         if hex1 is not None and hex2 is not None and side is not None:
-            hex_cells[body_id] = HexCell(side, to_hex(hex1, body_id), to_hex(hex2, body_id))
+            hex_cells[body_id] = HexCell(
+                side, to_hex(hex1, body_id), to_hex(hex2, body_id), cell_type or ""
+            )
 
     if not receptors:
         raise ExportError("光受容細胞が 1 つも見つかりません。注釈の形が想定と違う")
@@ -279,7 +291,12 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    assignments, cross_side = assign(receptors, hex_cells, edges)
+    anchors = (
+        {}
+        if config.retina_luminance_anchor_types is None
+        else {t: frozenset(config.retina_luminance_anchor_types) for t in config.retina_luminance_types}
+    )
+    assignments, cross_side = assign(receptors, hex_cells, edges, anchors)
     blob = render_tsv(assignments)
     digest = hashlib.sha256(blob).hexdigest()
 

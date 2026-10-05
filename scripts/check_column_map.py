@@ -2,7 +2,7 @@
 """カラム座標表を点検する。
 
 配線図データはリポジトリに含めない（`docs/CONNECTOME_SURVEY.md` 3.6）。
-表は人間が MaleCNS v1.0 から書き出し、`fly.retina.column_map_path` へ置く。
+表は `scripts/export_column_map.py` が MaleCNS v1.0 から書き出し、`fly.retina.column_map_path` へ置く。
 このスクリプトは、置いた表が `dopabae/retina.py` の想定と噛み合うかを確かめる。
 
 **表の中身は書き換えない。読んで数えるだけである。**
@@ -19,12 +19,12 @@
 - 座標の欠けている数。**欠けたものには値を作らない**
 - 画像に置いたときの、1 個あたりが見る範囲
 
-表の形（1 行目は見出し、タブ区切り）:
+表の形（1 行目は見出し、タブ区切り。side は眼の左右）:
 
-    body_id	cell_type	hex1	hex2
-    12345	R1	3	-2
-    12346	R8	3	-2
-    12347	R2	null	null
+    body_id	cell_type	hex1	hex2	side
+    12345	R1-R6	3	-2	R
+    12346	R8p	3	-2	R
+    12347	R1-R6	null	null	L
 
 座標が取れなかった行は `null`（または空欄）にする。埋めない。
 """
@@ -106,15 +106,18 @@ def main(argv: list[str]) -> int:
         print(f"範囲を決められません: {exc}", file=sys.stderr)
         return 1
 
-    nominal = retina._field_size(config, retina._centers(config, column_map, blank), blank)
+    nominal = retina._field_size(
+        config, retina._centers(config, retina._placed(config, column_map), blank), blank
+    )
     spread = len({(f.x0, f.y0) for f in built})
     print(f"画像: {blank.width}×{blank.height}")
+    print(f"置きかた: {config.retina_layout} / 拾いかた: {config.retina_sampling}")
     print(f"1 個が見る範囲: {nominal[0]}×{nominal[1]} 画素（縁では切り取られる）")
     print(f"中心の重複していない位置: {spread} / {len(built)}")
     if nominal[0] * nominal[1] <= 1:
         print(
-            "範囲が 1 画素しかない。気配の線は 1 画素の破線なので、"
-            "当たるかどうかが運で決まる。fly.retina.field_px で広げる",
+            "範囲が 1 画素。気配の線は 1 画素の破線なので、当たるかどうかが位置で決まる"
+            "（sampling: point は Stonkfly と同じ。area にすれば範囲の平均を採る）",
             file=sys.stderr,
         )
     return 0

@@ -24,11 +24,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .config import Config
+from .config import R8_SUBTYPE_CHANNELS, Config
 from .vision import Image
 
 # 座標表の列。この順で並んでいることを読み込み時に確かめる。
-COLUMNS = ("body_id", "cell_type", "hex1", "hex2")
+# side は眼の左右（"L" / "R"）。split_eyes で眼ごとに画像の別の場所へ置くのに使う。
+COLUMNS = ("body_id", "cell_type", "hex1", "hex2", "side")
+SIDES = ("L", "R")
 
 # 線形 sRGB から輝度を出す係数（Rec. 709）。
 LUMA = (0.2126, 0.7152, 0.0722)
@@ -46,6 +48,7 @@ class Column:
     cell_type: str
     hex1: int | None
     hex2: int | None
+    side: str | None = None
 
     @property
     def is_mapped(self) -> bool:
@@ -94,11 +97,15 @@ class Retina:
     luminance_count: int
     blue_green_count: int
     unmapped_count: int
+    layout: str = "shared"
+    sampling: str = "area"
 
     def as_dict(self) -> dict:
         return {
             "column_map_sha256": self.column_map_sha256,
             "image_sha256": self.image_sha256,
+            "layout": self.layout,
+            "sampling": self.sampling,
             "field_px": [self.field_w, self.field_h],
             "luminance_count": self.luminance_count,
             "blue_green_count": self.blue_green_count,
@@ -140,7 +147,8 @@ def load_column_map(path: Path | str) -> ColumnMap:
     header = tuple(h.strip() for h in lines[0].split("\t"))
     if header != COLUMNS:
         raise RetinaError(
-            f"座標表の見出しが違います。{chr(9).join(COLUMNS)} の順に並べる: {header}"
+            f"座標表の見出しが違います。{chr(9).join(COLUMNS)} の順に並べる: {header}。"
+            "古い形（side の列が無い）なら scripts/export_column_map.py で書き出し直す"
         )
 
     seen: set[int] = set()
@@ -158,12 +166,20 @@ def load_column_map(path: Path | str) -> ColumnMap:
         cell_type = parts[1].strip()
         if not cell_type:
             raise RetinaError(f"座標表の {offset} 行目に cell_type がありません")
+        side_text = parts[4].strip()
+        if side_text.lower() in ("", "null", "none", "na", "nan"):
+            side = None
+        elif side_text in SIDES:
+            side = side_text
+        else:
+            raise RetinaError(f"座標表の {offset} 行目、side は L / R / null です: {side_text!r}")
         columns.append(
             Column(
                 body_id=body_id,
                 cell_type=cell_type,
                 hex1=_cell(parts[2], offset, "hex1"),
                 hex2=_cell(parts[3], offset, "hex2"),
+                side=side,
             )
         )
     return ColumnMap(columns=tuple(columns), sha256=digest, source=target.name)
@@ -186,6 +202,8 @@ def _field_size(
     記録にはこちらを残す。切り取られた個体の大きさを残すと、格子の目の粗さを
     読み違える。
     """
+    if config.retina_sampling == "point":
+        return 1, 1
     if config.retina_field_px is not None:
         return config.retina_field_px, config.retina_field_px
     # 格子の目の粗さから決める。重なりも隙間も作らない大きさになる。
@@ -197,12 +215,13 @@ def _field_size(
 def fields(config: Config, column_map: ColumnMap, image: Image) -> tuple[Field, ...]:
     """各受容細胞が見る画素の範囲を決める。
 
-    格子の広がりを画像いっぱいに引き伸ばす。**格子の間隔と画像の大きさの比は
-    設計者が決めたものであり、複眼の視野角とは無関係である。**
+    置きかたは `fly.retina.layout`。split_eyes は両眼を画像の左右に置き（Stonkfly）、
+    shared は両眼とも格子の広がりを画像いっぱいに引き伸ばす（Phase 2）。
+    **どちらも設計者が決めた対応づけであり、複眼の視野角とは無関係である。**
 
-    範囲の大きさを 1 画素にしないのは、気配の線が 1 画素の破線だからである。
-    点で拾うと、線に当たるかどうかが運で決まる。範囲の平均を採れば、
-    線の有無が濃さの差として残る。
+    拾いかたは `fly.retina.sampling`。point は 1 画素（Stonkfly）、area は範囲の平均
+    （Phase 2）。気配の線は 1 画素の破線なので、point では当たるかどうかが位置で決まり、
+    area なら線の有無が濃さの差として残る。
     """
     return _build(config, column_map, image)[0]
 
@@ -211,7 +230,8 @@ def _build(
     config: Config, column_map: ColumnMap, image: Image
 ) -> tuple[tuple[Field, ...], int, int]:
     """範囲と、切り取られる前の範囲の大きさ。中心の計算を 1 度で済ませる。"""
-    centers = _centers(config, column_map, image)
+    placed = _placed(config, column_map)
+    centers = _centers(config, placed, image)
     field_w, field_h = _field_size(config, centers, image)
     half_w, half_h = field_w // 2, field_h // 2
     built = tuple(
@@ -223,17 +243,67 @@ def _build(
             x1=min(image.width - 1, x - half_w + field_w - 1),
             y1=min(image.height - 1, y - half_h + field_h - 1),
         )
-        for column, (x, y) in zip(column_map.mapped, centers)
+        for column, (x, y) in zip(placed, centers)
     )
     return built, field_w, field_h
 
 
-def _centers(config: Config, column_map: ColumnMap, image: Image) -> tuple[tuple[int, int], ...]:
-    """各受容細胞の中心画素。格子の広がりを画像いっぱいに引き伸ばす。"""
+def _placed(config: Config, column_map: ColumnMap) -> tuple[Column, ...]:
+    """画像に置ける受容細胞。split_eyes では左右の分からない細胞を置かない（値を作らない）。"""
     mapped = column_map.mapped
+    if config.retina_layout == "split_eyes":
+        mapped = tuple(c for c in mapped if c.side in SIDES)
     if not mapped:
-        raise RetinaError("座標表に、座標の入った受容細胞が 1 個もありません")
+        raise RetinaError("座標表に、画像へ置ける受容細胞が 1 個もありません")
+    return mapped
 
+
+def _stonkfly_plane(hex1: int, hex2: int) -> tuple[float, float]:
+    """Stonkfly の置きかた（`hex1 − hex2/2`、行間 √3/2）。"""
+    return hex1 - hex2 / 2.0, hex2 * math.sqrt(3.0) / 2.0
+
+
+def _split_eye_uv(config: Config, placed: Sequence[Column]) -> list[tuple[float, float]]:
+    """両眼を画像の左右に置く（Stonkfly と同じ。docs/CONNECTOME_SURVEY.md 1.1）。
+
+    眼ごとに、輝度を受け取る型（R1-R6）の広がりを 0〜1 に引き伸ばし、左眼は画像の左
+    `eye_width`、右眼は右 `eye_width` に置く。右眼は左右を反転する。hex2 が増える向きが上。
+    """
+    plane = [_stonkfly_plane(c.hex1, c.hex2) for c in placed]  # type: ignore[arg-type]
+    extent: dict[str, tuple[float, float, float, float]] = {}
+    for side in SIDES:
+        anchors = [
+            p for c, p in zip(placed, plane)
+            if c.side == side and c.cell_type in config.retina_luminance_types
+        ] or [p for c, p in zip(placed, plane) if c.side == side]
+        if anchors:
+            xs = [p[0] for p in anchors]
+            ys = [p[1] for p in anchors]
+            extent[side] = (min(xs), max(xs) - min(xs), min(ys), max(ys) - min(ys))
+
+    width = config.retina_eye_width
+    out = []
+    for column, (px, py) in zip(placed, plane):
+        x_lo, x_span, y_lo, y_span = extent[column.side]  # type: ignore[index]
+        zx = 0.5 if x_span <= 0 else (px - x_lo) / x_span
+        zy = 0.5 if y_span <= 0 else (py - y_lo) / y_span
+        u = width * zx if column.side == "L" else (1.0 - width) + width * (1.0 - zx)
+        out.append((min(1.0, max(0.0, u)), min(1.0, max(0.0, 1.0 - zy))))
+    return out
+
+
+def _centers(
+    config: Config, mapped: Sequence[Column], image: Image
+) -> tuple[tuple[int, int], ...]:
+    """各受容細胞の中心画素。"""
+    if config.retina_layout == "split_eyes":
+        # Stonkfly と同じく、切り捨てで画素へ落とす。
+        return tuple(
+            (min(image.width - 1, int(u * (image.width - 1))), min(image.height - 1, int(v * (image.height - 1))))
+            for u, v in _split_eye_uv(config, mapped)
+        )
+
+    # shared: 両眼を区別せず、格子の広がりを画像いっぱいに引き伸ばす（Phase 2）。
     plane = [_axial_to_plane(c.hex1, c.hex2) for c in mapped]  # type: ignore[arg-type]
     xs = [p[0] for p in plane]
     ys = [p[1] for p in plane]
@@ -290,13 +360,18 @@ def luminance(rgb: tuple[float, float, float]) -> float:
     return LUMA[0] * rgb[0] + LUMA[1] * rgb[1] + LUMA[2] * rgb[2]
 
 
-def blue_green(rgb: tuple[float, float, float], channel: str) -> float:
+def blue_green(rgb: tuple[float, float, float], channel: str, cell_type: str = "") -> float:
     """R8 に渡す青／緑の代理値。
 
     実際の R8 は個眼ごとに Rh5（青）と Rh6（緑）へ分かれる。**その区別が
     MaleCNS v1.0 に注釈されているかは未確認**なので、いまは 1 本の代理値にする。
     注釈があると分かれば分けられる。どれを使うかは `agent.yaml` に置く。
     """
+    if channel == "by_subtype":
+        # R8p は青、R8y は緑（Stonkfly と同じ）。型から決められなければ値を作らない。
+        if cell_type not in R8_SUBTYPE_CHANNELS:
+            raise RetinaError(f"by_subtype では {cell_type!r} の色を決められません")
+        channel = R8_SUBTYPE_CHANNELS[cell_type]
     if channel == "blue_green_mean":
         return (rgb[1] + rgb[2]) / 2.0
     if channel == "green":
@@ -330,7 +405,7 @@ def activations(config: Config, image: Image, column_map: ColumnMap) -> Retina:
             luminance_count += 1
         elif _matches(field.cell_type, config.retina_blue_green_types):
             currents[field.body_id] = blue_green(
-                mean_linear_rgb(image, field), config.retina_r8_channel
+                mean_linear_rgb(image, field), config.retina_r8_channel, field.cell_type
             )
             blue_green_count += 1
         # どちらでもない型には値を作らない。座標表に混ざっていても無視する。
@@ -351,5 +426,7 @@ def activations(config: Config, image: Image, column_map: ColumnMap) -> Retina:
         field_h=field_h,
         luminance_count=luminance_count,
         blue_green_count=blue_green_count,
-        unmapped_count=column_map.unmapped_count,
+        unmapped_count=column_map.unmapped_count + (len(column_map.mapped) - len(built)),
+        layout=config.retina_layout,
+        sampling=config.retina_sampling,
     )

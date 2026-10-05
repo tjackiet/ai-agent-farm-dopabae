@@ -143,9 +143,23 @@ class SimulationSettings:
     delay_ms: float
     refractory_ms: float
     weight_per_synapse_mv: float
-    neuron_status: tuple[str, ...]
+    refractory_input: str
+    neuron_policy: str
     transmitter_column: str
     inhibitory_transmitters: tuple[str, ...]
+    modulatory_transmitters: tuple[str, ...]
+    r8_to_ame12_excitatory: bool
+    kc_resting_mv: float
+    kc_adaptation_mv: float
+    kc_adaptation_tau_ms: float
+    lamina_types: tuple[str, ...]
+    lamina_bias_mv: float
+    input_max_mv: float
+    input_half_saturation: float
+    input_smoothing_ms: float
+    input_chunk_ms: float
+    carry_state: bool
+    checkpoint_path: str
 
 
 @dataclass(frozen=True)
@@ -241,7 +255,11 @@ class Config:
     retina_column_map_path: str
     retina_luminance_types: tuple[str, ...]
     retina_blue_green_types: tuple[str, ...]
+    retina_luminance_anchor_types: tuple[str, ...] | None
     retina_r8_channel: str
+    retina_layout: str
+    retina_eye_width: float
+    retina_sampling: str
     retina_field_px: int | None
     retina_flip_x: bool
     retina_flip_y: bool
@@ -253,7 +271,14 @@ class Config:
 NEVER_SHOWN = ("balance", "pnl", "position")
 PALETTE_KEYS = ("background", "text", "up", "down", "wick", "bid", "ask")
 # R8 に渡す青／緑の代理値の採りかた。どれも設計者の読み替えである。
-R8_CHANNELS = ("blue_green_mean", "blue", "green")
+R8_CHANNELS = ("by_subtype", "blue_green_mean", "blue", "green")
+# by_subtype で使える型と、渡す色（Stonkfly と同じ。p→Rh5・y→Rh6 は文献の知見）。
+R8_SUBTYPE_CHANNELS = {"R8p": "blue", "R8y": "green"}
+RETINA_LAYOUTS = ("split_eyes", "shared")
+RETINA_SAMPLINGS = ("point", "area")
+# 網に入れる細胞の選びかた。いまは Stonkfly と同じものだけ。
+NEURON_POLICIES = ("assigned_superclass",)
+REFRACTORY_INPUTS = ("drop", "keep")
 
 # 配線図から読むファイル。どれも欠けてはならない。
 CONNECTOME_FILE_KEYS = ("annotations", "weights", "neurotransmitters")
@@ -304,9 +329,23 @@ def _simulation(raw: Any) -> SimulationSettings:
         delay_ms=_num(raw, f"{base}.transmission_delay_ms"),
         refractory_ms=_num(raw, f"{base}.refractory_ms"),
         weight_per_synapse_mv=_num(raw, f"{base}.weight_per_synapse_mv"),
-        neuron_status=_str_list(raw, f"{base}.neuron_status"),
+        refractory_input=_choice(raw, f"{base}.refractory_input", REFRACTORY_INPUTS),
+        neuron_policy=_choice(raw, f"{base}.neuron_policy", NEURON_POLICIES),
         transmitter_column=_str(raw, f"{base}.transmitter_column"),
         inhibitory_transmitters=_str_list(raw, f"{base}.inhibitory_transmitters"),
+        modulatory_transmitters=_str_list(raw, f"{base}.modulatory_transmitters"),
+        r8_to_ame12_excitatory=_bool(raw, f"{base}.r8_to_ame12_excitatory"),
+        kc_resting_mv=_num(raw, f"{base}.kc.resting_mv"),
+        kc_adaptation_mv=_num(raw, f"{base}.kc.adaptation_mv"),
+        kc_adaptation_tau_ms=_num(raw, f"{base}.kc.adaptation_tau_ms"),
+        lamina_types=_str_list(raw, f"{base}.lamina.types"),
+        lamina_bias_mv=_num(raw, f"{base}.lamina.bias_mv"),
+        input_max_mv=_num(raw, f"{base}.photoreceptor_input.max_mv"),
+        input_half_saturation=_num(raw, f"{base}.photoreceptor_input.half_saturation"),
+        input_smoothing_ms=_num(raw, f"{base}.photoreceptor_input.smoothing_ms"),
+        input_chunk_ms=_num(raw, f"{base}.photoreceptor_input.chunk_ms"),
+        carry_state=_bool(raw, f"{base}.carry_state"),
+        checkpoint_path=_str(raw, f"{base}.checkpoint_path"),
     )
     positive = {
         "dt_ms": settings.dt_ms,
@@ -314,6 +353,10 @@ def _simulation(raw: Any) -> SimulationSettings:
         "membrane_tau_ms": settings.membrane_tau_ms,
         "synaptic_tau_ms": settings.synaptic_tau_ms,
         "weight_per_synapse_mv": settings.weight_per_synapse_mv,
+        "kc.adaptation_tau_ms": settings.kc_adaptation_tau_ms,
+        "photoreceptor_input.half_saturation": settings.input_half_saturation,
+        "photoreceptor_input.smoothing_ms": settings.input_smoothing_ms,
+        "photoreceptor_input.chunk_ms": settings.input_chunk_ms,
     }
     for name, value in positive.items():
         if value <= 0:
@@ -325,8 +368,22 @@ def _simulation(raw: Any) -> SimulationSettings:
         raise ConfigError(f"agent.yaml の {base} の遅延は dt 以上、不応期は 0 以上です")
     if not settings.resting_mv < settings.threshold_mv or not settings.reset_mv < settings.threshold_mv:
         raise ConfigError(f"agent.yaml の {base} で静止電位とリセット電位は閾値より低くなければなりません")
-    if not settings.neuron_status:
-        raise ConfigError(f"agent.yaml の {base}.neuron_status が空です")
+    if settings.kc_adaptation_tau_ms == settings.membrane_tau_ms:
+        raise ConfigError(f"agent.yaml の {base} で kc.adaptation_tau_ms と membrane_tau_ms が等しい")
+    if not settings.kc_resting_mv < settings.threshold_mv:
+        raise ConfigError(f"agent.yaml の {base}.kc.resting_mv は閾値より低くなければなりません")
+    for name, value in (
+        ("kc.adaptation_mv", settings.kc_adaptation_mv),
+        ("lamina.bias_mv", settings.lamina_bias_mv),
+        ("photoreceptor_input.max_mv", settings.input_max_mv),
+    ):
+        if value < 0:
+            raise ConfigError(f"agent.yaml の {base}.{name} は 0 以上です")
+    if settings.input_chunk_ms < settings.dt_ms:
+        raise ConfigError(f"agent.yaml の {base}.photoreceptor_input.chunk_ms は dt 以上です")
+    overlap = set(settings.inhibitory_transmitters) & set(settings.modulatory_transmitters)
+    if overlap:
+        raise ConfigError(f"agent.yaml の {base} で抑制と調節の両方に入っている物質があります: {sorted(overlap)}")
     return settings
 
 
@@ -426,6 +483,23 @@ def load(path: Path | str | None = None) -> Config:
             f"agent.yaml の fly.retina で型が重複しています: {sorted(overlap)}"
         )
 
+    anchors_raw = _get(raw, "fly.retina.luminance_anchor_types")
+    anchors = None if anchors_raw is None else _str_list(raw, "fly.retina.luminance_anchor_types")
+    if anchors is not None and not anchors:
+        raise ConfigError("agent.yaml の fly.retina.luminance_anchor_types は null か、型名を 1 つ以上")
+    r8_channel = _choice(raw, "fly.retina.r8_channel", R8_CHANNELS)
+    if r8_channel == "by_subtype":
+        unknown = [t for t in blue_green_types if t not in R8_SUBTYPE_CHANNELS]
+        if unknown:
+            # 型から色を決められない細胞に、作った値を渡さない。
+            raise ConfigError(
+                f"agent.yaml の fly.retina.r8_channel が by_subtype のとき、blue_green_types は "
+                f"{sorted(R8_SUBTYPE_CHANNELS)} だけです: {unknown}"
+            )
+    eye_width = _num(raw, "fly.retina.eye_width")
+    if not 0 < eye_width <= 1:
+        raise ConfigError("agent.yaml の fly.retina.eye_width は 0 より大きく 1 以下です")
+
     field_px = _get(raw, "fly.retina.field_px")
     if field_px is not None:
         field_px = _int(raw, "fly.retina.field_px")
@@ -510,7 +584,11 @@ def load(path: Path | str | None = None) -> Config:
         retina_column_map_path=_str(raw, "fly.retina.column_map_path"),
         retina_luminance_types=luminance_types,
         retina_blue_green_types=blue_green_types,
-        retina_r8_channel=_choice(raw, "fly.retina.r8_channel", R8_CHANNELS),
+        retina_luminance_anchor_types=anchors,
+        retina_r8_channel=r8_channel,
+        retina_layout=_choice(raw, "fly.retina.layout", RETINA_LAYOUTS),
+        retina_eye_width=eye_width,
+        retina_sampling=_choice(raw, "fly.retina.sampling", RETINA_SAMPLINGS),
         retina_field_px=field_px,
         retina_flip_x=_bool(raw, "fly.retina.flip_x"),
         retina_flip_y=_bool(raw, "fly.retina.flip_y"),

@@ -107,6 +107,8 @@ class ConnectomeConfigTest(unittest.TestCase):
         sim = config_module.load().simulation
         self.assertLess(sim.resting_mv, sim.threshold_mv)
         self.assertIn("histamine", sim.inhibitory_transmitters)
+        self.assertEqual(sim.lamina_types, ("L1", "L2", "L3", "L5"))
+        self.assertTrue(sim.carry_state)
 
     def test_rejects_equal_time_constants(self):
         """厳密解の式が 0 除算になる。"""
@@ -127,6 +129,59 @@ class ConnectomeConfigTest(unittest.TestCase):
 
     def test_rejects_zero_synapse_threshold(self):
         raw = self.with_connectome(synapse_threshold=0)
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def retina(self, **changes) -> dict:
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["retina"].update(changes)
+        return raw
+
+    def test_by_subtype_needs_known_r8_types(self):
+        """型から色を決められない R8 に、作った値を渡さない。"""
+        raw = self.retina(r8_channel="by_subtype", blue_green_types=["R8p", "R8_unclear"])
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+        config_module.load(write(self.retina(r8_channel="blue_green_mean", blue_green_types=["R8p", "R8_unclear"])))
+
+    def test_rejects_bad_eye_width(self):
+        for bad in (0, 1.5, -0.2):
+            with self.assertRaises(config_module.ConfigError, msg=bad):
+                config_module.load(write(self.retina(eye_width=bad)))
+
+    def test_rejects_empty_anchor_list(self):
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(self.retina(luminance_anchor_types=[])))
+        self.assertIsNone(config_module.load(write(self.retina(luminance_anchor_types=None))).retina_luminance_anchor_types)
+
+    def test_rejects_unknown_layout_and_sampling(self):
+        for key, value in (("layout", "cyclops"), ("sampling", "bilinear")):
+            with self.assertRaises(config_module.ConfigError, msg=key):
+                config_module.load(write(self.retina(**{key: value})))
+
+    def test_rejects_transmitter_both_inhibitory_and_modulatory(self):
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["simulation"]["modulatory_transmitters"] = ["dopamine", "gaba"]
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_kc_rest_above_threshold(self):
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["simulation"]["kc"]["resting_mv"] = -40
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_unknown_refractory_input(self):
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["simulation"]["refractory_input"] = "maybe"
         with self.assertRaises(config_module.ConfigError):
             config_module.load(write(raw))
 
