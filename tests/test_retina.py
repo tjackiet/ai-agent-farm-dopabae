@@ -26,14 +26,35 @@ def image(cfg, bid=Decimal(14699000), ask=Decimal(14701000)) -> vision.Image:
     return vision.render(cfg, candles(), bid, ask, "btc_jpy")
 
 
+# MaleCNS v1.0 の光受容細胞の型名（2026-10-05、body-annotations の type 列で確かめた）。
+MALECNS_PHOTORECEPTOR_TYPES = (
+    "R1-R6",
+    "R7R8_unclear",
+    "R7_unclear",
+    "R7d",
+    "R7p",
+    "R7y",
+    "R8_unclear",
+    "R8d",
+    "R8p",
+    "R8y",
+)
+
+
 def lattice(radius: int = 6, r8_every: int = 7) -> list[tuple[int, str, int | None, int | None]]:
-    """六角格子を模した座標表の中身。実データの代わりに使う。"""
+    """六角格子を模した座標表の中身。実データの代わりに使う。
+
+    型名は MaleCNS v1.0 の実データと同じものを使う（`R1-R6` / `R8p` / `R8y`）。
+    """
     rows: list[tuple[int, str, int | None, int | None]] = []
     body = 1000
     for q in range(-radius, radius + 1):
         for p in range(-radius, radius + 1):
             body += 1
-            kind = "R8" if body % r8_every == 0 else f"R{body % 6 + 1}"
+            if body % r8_every == 0:
+                kind = "R8p" if body % 2 else "R8y"
+            else:
+                kind = "R1-R6"
             rows.append((body, kind, p, q))
     return rows
 
@@ -68,24 +89,24 @@ class LoadTest(unittest.TestCase):
 
     def test_header_must_match(self):
         path = self.root / "x.tsv"
-        path.write_text("id\ttype\ta\tb\n1\tR1\t0\t0\n", encoding="utf-8")
+        path.write_text("id\ttype\ta\tb\n1\tR1-R6\t0\t0\n", encoding="utf-8")
         with self.assertRaises(retina.RetinaError):
             retina.load_column_map(path)
 
     def test_duplicate_body_id_raises(self):
-        path = write_map(self.root, [(1, "R1", 0, 0), (1, "R2", 1, 0)])
+        path = write_map(self.root, [(1, "R1-R6", 0, 0), (1, "R8p", 1, 0)])
         with self.assertRaises(retina.RetinaError):
             retina.load_column_map(path)
 
     def test_non_integer_hex_raises(self):
-        path = write_map(self.root, [(1, "R1", 0, 0)])
-        path.write_text(path.read_text(encoding="utf-8").replace("R1\t0\t0", "R1\tx\t0"), encoding="utf-8")
+        path = write_map(self.root, [(1, "R1-R6", 0, 0)])
+        path.write_text(path.read_text(encoding="utf-8").replace("R1-R6\t0\t0", "R1-R6\tx\t0"), encoding="utf-8")
         with self.assertRaises(retina.RetinaError):
             retina.load_column_map(path)
 
     def test_null_hex_stays_unmapped(self):
         """観測できなかった座標は埋めない。数だけ残す。"""
-        path = write_map(self.root, [(1, "R1", 0, 0), (2, "R1", None, None), (3, "R1", None, 2)])
+        path = write_map(self.root, [(1, "R1-R6", 0, 0), (2, "R1-R6", None, None), (3, "R1-R6", None, 2)])
         column_map = retina.load_column_map(path)
         self.assertEqual(len(column_map.columns), 3)
         self.assertEqual(len(column_map.mapped), 1)
@@ -108,7 +129,7 @@ class ActivationTest(unittest.TestCase):
         self.map = retina.load_column_map(write_map(self.root, lattice()))
 
     def test_unmapped_cells_get_no_value(self):
-        rows = lattice(2) + [(999001, "R1", None, None), (999002, "R8", None, None)]
+        rows = lattice(2) + [(999001, "R1-R6", None, None), (999002, "R8p", None, None)]
         column_map = retina.load_column_map(write_map(self.root, rows, "b.tsv"))
         out = retina.activations(self.cfg, image(self.cfg), column_map)
         self.assertEqual(out.unmapped_count, 2)
@@ -145,6 +166,19 @@ class ActivationTest(unittest.TestCase):
         out = retina.activations(self.cfg, image(self.cfg), column_map)
         self.assertNotIn(999003, out.currents)
 
+    def test_unused_photoreceptor_types_get_no_value(self):
+        """R7 / R8d / R8_unclear は表に載っていても値を作らない（agent.yaml の型名で選ぶ）。"""
+        rows = lattice(2) + [(999004, "R7p", 0, 0), (999005, "R8d", 1, 0), (999006, "R8_unclear", 0, 1)]
+        column_map = retina.load_column_map(write_map(self.root, rows, "g.tsv"))
+        out = retina.activations(self.cfg, image(self.cfg), column_map)
+        for body_id in (999004, 999005, 999006):
+            self.assertNotIn(body_id, out.currents)
+
+    def test_repo_config_uses_malecns_type_names(self):
+        """agent.yaml の型名が MaleCNS v1.0 に実在すること。噛み合わなければ入力が作れない。"""
+        for name in self.cfg.retina_luminance_types + self.cfg.retina_blue_green_types:
+            self.assertIn(name, MALECNS_PHOTORECEPTOR_TYPES)
+
     def test_no_matching_type_raises(self):
         """空の入力は「真っ暗な世界」と区別がつかない。静かに返さない。"""
         rows = [(1, "Mi1", 0, 0), (2, "Tm3", 1, 0)]
@@ -153,7 +187,7 @@ class ActivationTest(unittest.TestCase):
             retina.activations(self.cfg, image(self.cfg), column_map)
 
     def test_no_mapped_cell_raises(self):
-        column_map = retina.load_column_map(write_map(self.root, [(1, "R1", None, None)], "e.tsv"))
+        column_map = retina.load_column_map(write_map(self.root, [(1, "R1-R6", None, None)], "e.tsv"))
         with self.assertRaises(retina.RetinaError):
             retina.activations(self.cfg, image(self.cfg), column_map)
 
@@ -213,7 +247,7 @@ class FieldTest(unittest.TestCase):
 
     def test_single_column_lands_in_the_middle(self):
         """広がりが 0 でも 0 除算しない。"""
-        column_map = retina.load_column_map(write_map(self.root, [(1, "R1", 3, 3)], "f.tsv"))
+        column_map = retina.load_column_map(write_map(self.root, [(1, "R1-R6", 3, 3)], "f.tsv"))
         img = image(self.cfg)
         field = retina.fields(self.cfg, column_map, img)[0]
         self.assertLessEqual(abs((field.x0 + field.x1) // 2 - img.width // 2), img.width // 4)

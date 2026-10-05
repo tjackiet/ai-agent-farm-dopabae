@@ -118,6 +118,18 @@ class LlmSettings:
 
 
 @dataclass(frozen=True)
+class ConnectomeFile:
+    """配線図データの 1 ファイル。取得元からの相対パスと指紋だけを持つ。
+
+    中身はリポジトリに含めない（`docs/CONNECTOME_SURVEY.md` 3.6）。
+    """
+
+    path: str
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class Config:
     """agent.yaml の内容。すべて読み取り専用。"""
 
@@ -199,6 +211,12 @@ class Config:
     vision_text_rows_px: int
     vision_path: str
 
+    # 配線図（fly.connectome）。データはリポジトリに含めず、取得元と指紋だけを持つ。
+    connectome_source: str
+    connectome_download_base: str
+    connectome_local_dir: str
+    connectome_files: dict[str, ConnectomeFile]
+
     retina_column_map_path: str
     retina_luminance_types: tuple[str, ...]
     retina_blue_green_types: tuple[str, ...]
@@ -215,6 +233,41 @@ NEVER_SHOWN = ("balance", "pnl", "position")
 PALETTE_KEYS = ("background", "text", "up", "down", "wick", "bid", "ask")
 # R8 に渡す青／緑の代理値の採りかた。どれも設計者の読み替えである。
 R8_CHANNELS = ("blue_green_mean", "blue", "green")
+
+# 配線図から読むファイル。どれも欠けてはならない。
+CONNECTOME_FILE_KEYS = ("annotations", "weights")
+
+
+def _connectome_files(raw: Any) -> dict[str, ConnectomeFile]:
+    """取得するファイルと指紋。指紋の無いファイルは読まない（再現性のため）。"""
+    files = _get(raw, "fly.connectome.files")
+    if not isinstance(files, dict):
+        raise ConfigError("agent.yaml の fly.connectome.files は名前 → {path, sha256, size_bytes} です")
+    parsed: dict[str, ConnectomeFile] = {}
+    for key in CONNECTOME_FILE_KEYS:
+        base = f"fly.connectome.files.{key}"
+        path = _str(raw, f"{base}.path")
+        if path.startswith("/") or ".." in path.split("/") or "?" in path:
+            raise ConfigError(f"agent.yaml の {base}.path は download_base からの相対パスです: {path}")
+        digest = _str(raw, f"{base}.sha256")
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ConfigError(f"agent.yaml の {base}.sha256 は 16 進 64 桁（小文字）です")
+        size = _int(raw, f"{base}.size_bytes")
+        if size <= 0:
+            raise ConfigError(f"agent.yaml の {base}.size_bytes は 1 以上です")
+        parsed[key] = ConnectomeFile(path=path, sha256=digest, size_bytes=size)
+    return parsed
+
+
+def _download_base(raw: Any) -> str:
+    """取得元。トークンを含む URL は置かせない（`docs/CONNECTOME_SURVEY.md` 3.6）。"""
+    value = _str(raw, "fly.connectome.download_base")
+    if not value.startswith(("gs://", "https://")) or "?" in value or "#" in value:
+        raise ConfigError(
+            "agent.yaml の fly.connectome.download_base は gs:// か https:// で、"
+            f"クエリ（トークン）を含まない URL です: {value}"
+        )
+    return value if value.endswith("/") else value + "/"
 
 
 def _rgb(raw: Any, path: str) -> tuple[int, int, int]:
@@ -377,6 +430,10 @@ def load(path: Path | str | None = None) -> Config:
         vision_margin_px=_int(raw, "fly.vision.margin_px"),
         vision_text_rows_px=_int(raw, "fly.vision.text_rows_px"),
         vision_path=_str(raw, "memory.vision.path"),
+        connectome_source=_str(raw, "fly.connectome.source"),
+        connectome_download_base=_download_base(raw),
+        connectome_local_dir=_str(raw, "fly.connectome.local_dir"),
+        connectome_files=_connectome_files(raw),
         retina_column_map_path=_str(raw, "fly.retina.column_map_path"),
         retina_luminance_types=luminance_types,
         retina_blue_green_types=blue_green_types,

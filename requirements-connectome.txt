@@ -1,0 +1,5 @@
+# 配線図データの下ごしらえ（scripts/export_column_map.py）だけが使う依存。
+# 定期実行の 1 周とテストには要らないので requirements.txt から分けてある。
+# MaleCNS v1.0 の flat-connectome は Arrow IPC（feather）形式で配られている。
+PyYAML>=6.0
+pyarrow>=17.0
