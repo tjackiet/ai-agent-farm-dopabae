@@ -44,8 +44,8 @@ from typing import Iterable, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dopabae import retina  # noqa: E402
-from dopabae.config import REPO_ROOT, Config, ConnectomeFile, load  # noqa: E402
+from dopabae import connectome, retina  # noqa: E402
+from dopabae.config import REPO_ROOT, Config, load  # noqa: E402
 
 # 複眼の光受容細胞。R1-R6 / R7* / R8* の型名で、視葉の感覚細胞に分類されたもの。
 PHOTORECEPTOR_TYPE = re.compile(r"^R[1-8]")
@@ -172,23 +172,12 @@ def render_tsv(assignments: Iterable[Assignment]) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def verified(config: Config, name: str) -> Path:
     """`agent.yaml` の指紋と一致する入力だけを返す。"""
-    expected: ConnectomeFile = config.connectome_files[name]
-    path = REPO_ROOT / config.connectome_local_dir / expected.path
-    if not path.exists():
-        raise ExportError(f"{name} がありません: {path}\n先に python3 scripts/fetch_connectome.py を実行する")
-    if path.stat().st_size != expected.size_bytes or sha256_of(path) != expected.sha256:
-        raise ExportError(f"{name} の指紋が agent.yaml と合いません: {path}")
-    return path
+    try:
+        return connectome.verified_input(config, name)
+    except connectome.ConnectomeError as exc:
+        raise ExportError(str(exc)) from exc
 
 
 def read_inputs(

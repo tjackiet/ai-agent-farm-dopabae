@@ -68,10 +68,11 @@ Phase 4 の評価基盤まで実装済み。
 │   ├── fetch_connectome.py # 配線図データを取得する（指紋が合わなければ置かない）
 │   ├── export_column_map.py # 光受容細胞のカラム座標表を書き出す
 │   ├── check_column_map.py # 座標表を点検する（読んで数えるだけ）
+│   ├── bench_simulation.py # 全脳の LIF シミュレーションの計算時間とメモリを測る
 │   ├── launchd/            # 15分ごとの定期実行（macOS）
 │   └── systemd/            # 同（Linux。cron の例も）
 ├── requirements.txt        # Python の依存。PyYAML のみ
-├── requirements-connectome.txt # 配線図の下ごしらえだけが使う依存（pyarrow）
+├── requirements-connectome.txt # 配線図とシミュレーションの依存（pyarrow / numpy）
 ├── tests/                  # agent.yaml が不変ルールを満たすことの検証
 ├── .claude/settings.json   # 禁止コマンドのハーネス側での二重化
 ├── .github/
@@ -98,9 +99,10 @@ Phase 4 の評価基盤まで実装済み。
 | `scripts/make_arm.py`         | 評価の腕の設定を作る。発注はしない                           |
 | `scripts/run_arms.py`         | 腕をまとめて1回ぶん回す。定期実行から呼ぶ                    |
 | `scripts/fetch_connectome.py` / `export_column_map.py` / `check_column_map.py` | 配線図データの取得、光受容細胞の座標表の書き出しと点検。データと表は Git 管理外 |
+| `scripts/bench_simulation.py` | 全脳を 1 観測ぶん（神経時間 0.5 秒）動かし、計算時間とメモリを測る。結果は `var/bench/` |
 | `scripts/launchd/` / `systemd/` | 15分ごとの定期実行の雛形                                   |
 | `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
-| `requirements-connectome.txt` | 配線図の下ごしらえだけが使う依存（pyarrow）。定期実行とテストには要らない |
+| `requirements-connectome.txt` | 配線図とシミュレーションの依存（pyarrow / numpy）。対照群の腕の定期実行には要らない |
 | `tests/`                      | 檻・方向・1周の流れ・`agent.yaml` の不変ルールの検証。外には出ない |
 | `.github/workflows/`          | テスト（`tests.yml`）とセキュリティ点検（`security.yml`）。ナンピノニクスと同じ構成 |
 | `docs/REPOSITORY_PLAN.md`     | 本リポジトリで実装してよい範囲                               |
@@ -148,7 +150,7 @@ Phase 4 の評価基盤まで実装済み。
 
 ## セットアップ
 
-必要なのは Python 3.11 以上と PyYAML だけです（シミュレーションの依存はまだ入れていません）。
+必要なのは Python 3.11 以上と PyYAML だけです（配線図とシミュレーションには `requirements-connectome.txt` も入れます）。
 2026-09-15 に macOS の Python 3.14 と `bitbank-lab-cli` 0.5.0 で 1 周を確認しています。
 
 ```bash
@@ -186,6 +188,16 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 光受容細胞そのものはカラム座標を持たないので、出力シナプスの行き先（L1・Mi1 など）の
 カラムから決めます。決められない細胞には値を作りません。詳しくは
 `docs/IMPLEMENTATION_PLAN.md` の Phase 2「座標表の作りかた」にあります。
+
+全脳を 1 観測ぶん動かす計算時間は、次で測れます（初回は網の変換に 25 秒・2.1 GB）。
+
+```bash
+.venv/bin/python scripts/bench_simulation.py --threshold none --threshold 3 --threshold 5 \
+    --background-hz 0 --background-hz 5 --background-hz 20
+```
+
+2026-10-05 に Linux（4 コア）で測った結果は 4.7〜30.4 秒で、1 回の判断の上限（120 秒）に
+収まりました（`docs/IMPLEMENTATION_PLAN.md` Phase 3「状態」）。
 
 ### 評価する
 
