@@ -26,7 +26,11 @@ from typing import Any
 from .config import REPO_ROOT, Config
 
 # キャッシュの形式の版。形を変えたら上げる（古いキャッシュを読まないため）。
-COMPILED_VERSION = 1
+COMPILED_VERSION = 2
+
+# 符号を正にする結合（発火元の型名の頭、行き先の型名）。R8 → aMe12 は Xiao ら 2023 に基づく
+# Stonkfly の仮定（docs/CONNECTOME_SURVEY.md 1.1）。
+R8_AME12 = ("R8", "aMe12")
 
 
 class ConnectomeError(Exception):
@@ -68,12 +72,13 @@ def verified_input(config: Config, name: str) -> Path:
 class Spec:
     """網の作りかた。どれも設計者の選択であって、データの性質ではない。"""
 
-    neuron_status: tuple[str, ...]
-    # status によらず網に入れる型（入力を受け取る光受容細胞）。
-    extra_types: tuple[str, ...]
+    neuron_policy: str
     synapse_threshold: int | None
     transmitter_column: str
     inhibitory_transmitters: tuple[str, ...]
+    modulatory_transmitters: tuple[str, ...]
+    # 符号を正にする結合（発火元の型名の頭、行き先の型名）。
+    excitatory_overrides: tuple[tuple[str, str], ...]
     # 入力ファイルの SHA-256。中身が変われば別の網になる。
     inputs_sha256: tuple[tuple[str, str], ...]
 
@@ -91,11 +96,12 @@ def spec_from_config(config: Config, synapse_threshold: int | None | str = "conf
         raise ConnectomeError(f"シナプス数の閾値は 1 以上の整数か None です: {threshold!r}")
     sim = config.simulation
     return Spec(
-        neuron_status=sim.neuron_status,
-        extra_types=tuple(config.retina_luminance_types) + tuple(config.retina_blue_green_types),
+        neuron_policy=sim.neuron_policy,
         synapse_threshold=threshold,
         transmitter_column=sim.transmitter_column,
         inhibitory_transmitters=sim.inhibitory_transmitters,
+        modulatory_transmitters=sim.modulatory_transmitters,
+        excitatory_overrides=(R8_AME12,) if sim.r8_to_ame12_excitatory else (),
         inputs_sha256=tuple(sorted((k, v.sha256) for k, v in config.connectome_files.items())),
     )
 
@@ -106,12 +112,16 @@ class Network:
 
     `indptr[i]:indptr[i + 1]` が細胞 i から出る結合で、行き先が `post`、
     符号つきのシナプス数が `signed_count`（抑制なら負）。
+    `modulatory` が真の細胞の発火は、行き先の膜電位を動かさない（結合は残す）。
     """
 
     body_ids: Any  # numpy.ndarray[int64]
     indptr: Any  # numpy.ndarray[int64]
     post: Any  # numpy.ndarray[int32]
     signed_count: Any  # numpy.ndarray[int32]
+    cell_type: Any  # numpy.ndarray[str]。型の無い細胞は ""
+    side: Any  # numpy.ndarray[str]。"L" / "R" / ""
+    modulatory: Any  # numpy.ndarray[bool]
     meta: dict
 
     @property
@@ -121,6 +131,14 @@ class Network:
     @property
     def n_edges(self) -> int:
         return int(len(self.post))
+
+    def type_index(self, names: tuple[str, ...] = (), prefix: str | None = None) -> Any:
+        """型名が `names` のどれか、または `prefix` で始まる細胞の番号。"""
+        np = _numpy()
+        mask = np.isin(self.cell_type, list(names)) if names else np.zeros(self.n_neurons, dtype=bool)
+        if prefix:
+            mask |= np.char.startswith(self.cell_type.astype(str), prefix)
+        return np.flatnonzero(mask)
 
     def index_of(self, body_ids: Any) -> Any:
         """body_id の並びを細胞番号へ。網に無いものは -1。"""
@@ -169,27 +187,45 @@ def compile_network(config: Config, spec: Spec) -> Network:
     weights = verified_input(config, "weights")
     transmitters = verified_input(config, "neurotransmitters")
 
-    table = feather.read_table(annotations, columns=["bodyId", "type", "status"])
-    keep = pc.or_(
-        pc.is_in(table["status"], value_set=pa_strings(spec.neuron_status)),
-        pc.is_in(table["type"], value_set=pa_strings(spec.extra_types)),
+    table = feather.read_table(
+        annotations, columns=["bodyId", "type", "status", "superclass", "instance"]
     )
-    keep = pc.fill_null(keep, False)
-    body_ids = np.unique(table.filter(keep)["bodyId"].to_numpy())
+    if spec.neuron_policy != "assigned_superclass":  # pragma: no cover - 設定で弾いてある
+        raise ConnectomeError(f"扱えない neuron_policy です: {spec.neuron_policy}")
+    # superclass が付いていて、status が Glia でないもの（Stonkfly と同じ）。
+    superclass = pc.fill_null(table["superclass"], "")
+    keep = pc.and_(
+        pc.not_equal(superclass, ""),
+        pc.invert(pc.fill_null(pc.equal(table["status"], "Glia"), False)),
+    )
+    kept = table.filter(keep).sort_by("bodyId")
+    body_ids = kept["bodyId"].to_numpy()
     if len(body_ids) == 0:
-        raise ConnectomeError("網に入れる細胞が 1 つもありません。neuron_status と注釈を確かめる")
+        raise ConnectomeError("網に入れる細胞が 1 つもありません。注釈の形を確かめる")
+    if len(np.unique(body_ids)) != len(body_ids):
+        raise ConnectomeError("注釈の bodyId が重複しています")
+    cell_type = np.array([t or "" for t in kept["type"].to_pylist()], dtype=str)
+    side = np.array(
+        [(i[-1] if isinstance(i, str) and i[-2:] in ("_L", "_R") else "") for i in kept["instance"].to_pylist()],
+        dtype=str,
+    )
 
-    # 符号は発火元の伝達物質で決める。表に無い・不明な細胞は興奮（sign_of と同じ規則）。
+    # 符号と調節性は発火元の伝達物質で決める。表に無い・不明な細胞は興奮（sign_of と同じ規則）。
     nt = feather.read_table(transmitters, columns=["body", spec.transmitter_column])
     nt_ids = nt["body"].to_numpy()
+    column = nt[spec.transmitter_column]
     inhibitory = pc.fill_null(
-        pc.is_in(nt[spec.transmitter_column], value_set=pa_strings(spec.inhibitory_transmitters)),
-        False,
+        pc.is_in(column, value_set=pa_strings(spec.inhibitory_transmitters)), False
+    ).to_numpy(zero_copy_only=False)
+    modulators = pc.fill_null(
+        pc.is_in(column, value_set=pa_strings(spec.modulatory_transmitters)), False
     ).to_numpy(zero_copy_only=False)
     sign = np.ones(len(body_ids), dtype=np.int32)
+    modulatory = np.zeros(len(body_ids), dtype=bool)
     pos = np.clip(np.searchsorted(body_ids, nt_ids), 0, len(body_ids) - 1)
     hit = body_ids[pos] == nt_ids
     sign[pos[hit & inhibitory]] = -1
+    modulatory[pos[hit & modulators]] = True
 
     # 1 億 5 千万行を丸ごと読まない。網の細胞どうしの結合だけを取り出す。
     id_set = pa_ints(body_ids)
@@ -206,6 +242,14 @@ def compile_network(config: Config, spec: Spec) -> Network:
     if len(count) and int(count.max()) > np.iinfo(np.int32).max:
         raise ConnectomeError("シナプス数が int32 に収まりません。形が想定と違う")
     signed = count.astype(np.int32) * sign[pre]
+    overridden = 0
+    for pre_prefix, post_type in spec.excitatory_overrides:
+        # 細胞ごとの印を先に作る（結合ごとに型名の配列を作ると数 GB になる）。
+        from_mask = np.char.startswith(cell_type, pre_prefix)
+        to_mask = cell_type == post_type
+        flip = from_mask[pre] & to_mask[post]
+        overridden += int(flip.sum())
+        signed[flip] = np.abs(signed[flip])
     indptr, post_sorted, signed_sorted = build_csr(len(body_ids), pre, post, signed)
 
     meta = {
@@ -216,8 +260,10 @@ def compile_network(config: Config, spec: Spec) -> Network:
         "n_edges": int(len(post_sorted)),
         "n_synapses": int(np.abs(signed_sorted).sum(dtype=np.int64)),
         "n_inhibitory_neurons": int((sign < 0).sum()),
+        "n_modulatory_neurons": int(modulatory.sum()),
+        "n_overridden_edges": overridden,
     }
-    return Network(body_ids, indptr, post_sorted, signed_sorted, meta)
+    return Network(body_ids, indptr, post_sorted, signed_sorted, cell_type, side, modulatory, meta)
 
 
 def pa_strings(values: tuple[str, ...]):
@@ -248,6 +294,9 @@ def save(network: Network, path: Path) -> None:
             indptr=network.indptr,
             post=network.post,
             signed_count=network.signed_count,
+            cell_type=network.cell_type,
+            side=network.side,
+            modulatory=network.modulatory,
             meta=np.array(json.dumps(network.meta, ensure_ascii=False)),
         )
     part.replace(path)
@@ -269,6 +318,9 @@ def load(path: Path, spec: Spec | None = None) -> Network:
             indptr=data["indptr"],
             post=data["post"],
             signed_count=data["signed_count"],
+            cell_type=data["cell_type"],
+            side=data["side"],
+            modulatory=data["modulatory"],
             meta=meta,
         )
 

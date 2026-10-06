@@ -195,8 +195,11 @@ fly:
 
   # 画像から光受容細胞への入力（Phase 2 後半）。
   # **どれも設計者が決めた読み替えであり、生体の視野との一致は検証されていない。**
+  # 2026-10-05 から、既定値は Stonkfly に合わせてある（docs/CONNECTOME_SURVEY.md 1.1）。
+  # Phase 2 で設計者が選んだやりかた（shared / area / blue_green_mean）は選択肢として残し、
+  # Phase 4 の腕で差を測れるようにしてある。
   retina:
-    # カラム座標の表（body_id / cell_type / hex1 / hex2 の TSV）。
+    # カラム座標の表（body_id / cell_type / hex1 / hex2 / side の TSV）。
     # scripts/export_column_map.py が MaleCNS v1.0 から書き出す。光受容細胞は
     # assignedOlHex を持たないので、標的（シナプス後の細胞）のカラムから決める
     # （docs/IMPLEMENTATION_PLAN.md Phase 2「座標表の作りかた」）。
@@ -205,20 +208,29 @@ fly:
     # 受容細胞の型名。2026-10-05 に MaleCNS v1.0 の実データで確かめた。
     # R1–R6 は 1 つの型（R1-R6）にまとまっていて、個別の R1〜R6 は無い。
     luminance_types: [R1-R6] # 輝度を受け取る（R1–R6）
+    # R1-R6 の座標を決めるときに数える標的の型。null は座標を持つ全標的（Phase 2 の選択）。
+    # Stonkfly は L1・L2・L3 だけを数える（3,335 個に座標が付く）。R8 は常に全標的で決める。
+    luminance_anchor_types: [L1, L2, L3]
     # R8 は R8p / R8y / R8d / R8_unclear に分かれている。p / y の 2 型だけを使う
     # （合計 811 個。Stonkfly の「R8 811 個」と一致する）。
     # R8d（背側縁）と R8_unclear（p / y が決まっていない）には値を作らない。
     blue_green_types: [R8p, R8y] # 青／緑を受け取る（R8）
     # R8 は個眼ごとに Rh5（青）と Rh6（緑）へ分かれる。MaleCNS の型名は p / y を
     # 区別している（p→Rh5・y→Rh6 の対応は文献の知見で、データには書かれていない）。
-    # いまは 1 本の代理値にする。型ごとに分けるかは Phase 4 の腕。
-    r8_channel: blue_green_mean # blue_green_mean | blue | green
-    # 1 個の受容細胞が見る画素の範囲（正方形の一辺）。null は格子の目の粗さから決める。
-    # 1 画素にしない。気配の線が 1 画素の破線なので、点で拾うと運で決まる。
+    # by_subtype は R8p に青、R8y に緑を渡す（Stonkfly と同じ）。
+    r8_channel: by_subtype # by_subtype | blue_green_mean | blue | green
+    # 両眼の置きかた。split_eyes は左眼を画像の左、右眼を右に置き、中央が重なる
+    # （Stonkfly と同じ。右眼は左右を反転）。shared は両眼とも画像全体を同じ座標で見る（Phase 2）。
+    layout: split_eyes # split_eyes | shared
+    eye_width: 0.6 # split_eyes で 1 眼が占める画像の幅（割合）。0.6 で中央 20% が重なる
+    # 画素の拾いかた。point は中心の 1 画素（Stonkfly と同じ）。area は範囲の平均（Phase 2）。
+    # point では、1 画素の破線の気配が当たるかどうかが位置で決まる（Phase 2 の論点）。
+    sampling: point # point | area
+    # area のときに 1 個が見る画素の範囲（正方形の一辺）。null は格子の目の粗さから決める。
     field_px: null
-    # 格子を画像へ置く向き。**複眼の視野との対応は未確認。** Phase 4 の腕にできる。
+    # shared のときに格子を画像へ置く向き。**複眼の視野との対応は未確認。**
     flip_x: false
-    flip_y: true # hex2 が増える向きを画像の上にする
+    flip_y: true # hex2 が増える向きを画像の上にする（split_eyes も同じ向き）
 
   vision:
     width: 320
@@ -245,7 +257,7 @@ fly:
       color: [R8] # 青／緑の代理値
 
   # LIF の値。Shiu ら (2024) を Stonkfly が再利用した値（docs/CONNECTOME_SURVEY.md 5 章）。
-  # **どれも候補値。** 2026-10-05 の計算時間の計測に使った（docs/IMPLEMENTATION_PLAN.md 3 節 2）。
+  # **どれも候補値。** 2026-10-05 から Stonkfly の網の作りかたに合わせてある（同 1.1）。
   simulation:
     model: lif
     dt_ms: 0.1
@@ -253,19 +265,47 @@ fly:
     membrane_tau_ms: 20
     synaptic_tau_ms: 5
     resting_mv: -52 # 静止電位
-    reset_mv: -52 # 発火したあとに戻す電位
+    reset_mv: -52 # 発火したあとに戻す電位（静止電位との差を、各細胞の静止電位に足して使う）
     threshold_mv: -45
     transmission_delay_ms: 1.8
     refractory_ms: 2.2
     weight_per_synapse_mv: 0.275 # シナプス 1 個あたり。結合の重みはシナプス数 × これ
-    # 網に入れる細胞。status が Traced の細胞（2.1 の 25.6M 結合を再現する集合）に、
-    # fly.retina で入力を受け取る型を status によらず足す（R1-R6 の 6 割は status が空のため）。
-    neuron_status: [Traced]
-    # 結合の符号。伝達物質の列と、抑制として扱う物質。それ以外は興奮として扱う
-    # （Stonkfly と同じ。解決できない・ドーパミンなども興奮。同 1 章）。
-    # **光受容細胞はヒスタミンなので抑制になる。** 静止発火率の扱い（同 6 章）は未決。
+    # 不応期中の細胞に届いた入力。drop は捨てる（Stonkfly）。keep は足す（Brian2）。
+    refractory_input: drop # drop | keep
+    # 網に入れる細胞。superclass が付いていて status が Glia でないもの（Stonkfly と同じ。
+    # 166,700 細胞・25,582,938 結合）。
+    neuron_policy: assigned_superclass
+    # 結合の符号。伝達物質の列と、抑制として扱う物質。判定できない・欠損は興奮（Stonkfly と同じ）。
+    # **光受容細胞はヒスタミンなので抑制になる。**
     transmitter_column: consensus_nt
     inhibitory_transmitters: [gaba, glutamate, histamine]
+    # これだけを出す細胞の発火は、行き先の膜電位を動かさない（速い作用を持たせない。Stonkfly と同じ）。
+    modulatory_transmitters: [dopamine, octopamine, serotonin]
+    # R8 → aMe12 の結合だけ符号を正にする（Xiao ら 2023。Stonkfly と同じ。転用は仮定）。
+    r8_to_ame12_excitatory: true
+    # KC（型名が KC で始まる細胞）。静止電位と、発火ごとに足される適応（Stonkfly と同じ）。
+    kc:
+      resting_mv: -60
+      adaptation_mv: 8
+      adaptation_tau_ms: 200
+    # 背景の活動。ラミナに一定の電流を流し、何も見ていなくても発火させる（Stonkfly と同じ）。
+    # 光受容細胞（ヒスタミン＝抑制）の入力は、この発火を減らす形で下流へ届く。
+    # **Stonkfly 自身が「検証された網膜の生理ではない」と注記している。**
+    lamina:
+      types: [L1, L2, L3, L5]
+      bias_mv: 12
+    # 光受容細胞への入力。明るさ L（0〜1）を時定数 smoothing_ms で平滑化し、
+    # max_mv × L / (half_saturation + L) の一定電流にする（Stonkfly と同じ）。
+    # chunk_ms ごとに平滑化した値を更新し、そのあいだは電流を変えない。
+    photoreceptor_input:
+      max_mv: 30
+      half_saturation: 0.02
+      smoothing_ms: 10
+      chunk_ms: 10
+    # 観測をまたいで網の状態を引き継ぐ（Stonkfly と同じ）。毎回静止状態から始めると、
+    # 0.5 秒の初めが立ち上がりの過渡応答になる。状態は checkpoint_path に保存する（Git 管理外）。
+    carry_state: true
+    checkpoint_path: var/fly/state.npz
 
   readout:
     # 接近の指標 − 回避の指標 の1本の軸。正の閾値超で APPROACH、負の閾値未満で AVOID、間は NONE。

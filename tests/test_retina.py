@@ -41,13 +41,13 @@ MALECNS_PHOTORECEPTOR_TYPES = (
 )
 
 
-def lattice(radius: int = 6, r8_every: int = 7) -> list[tuple[int, str, int | None, int | None]]:
+def lattice(radius: int = 6, r8_every: int = 7, side: str = "R") -> list[tuple]:
     """六角格子を模した座標表の中身。実データの代わりに使う。
 
     型名は MaleCNS v1.0 の実データと同じものを使う（`R1-R6` / `R8p` / `R8y`）。
     """
-    rows: list[tuple[int, str, int | None, int | None]] = []
-    body = 1000
+    rows: list[tuple] = []
+    body = 1000 if side == "R" else 5000
     for q in range(-radius, radius + 1):
         for p in range(-radius, radius + 1):
             body += 1
@@ -55,13 +55,16 @@ def lattice(radius: int = 6, r8_every: int = 7) -> list[tuple[int, str, int | No
                 kind = "R8p" if body % 2 else "R8y"
             else:
                 kind = "R1-R6"
-            rows.append((body, kind, p, q))
+            rows.append((body, kind, p, q, side))
     return rows
 
 
 def write_map(directory: Path, rows, name: str = "column_map.tsv") -> Path:
+    """行は (body_id, 型, hex1, hex2) か、末尾に左右を足した 5 つ組。左右の既定は R。"""
     lines = ["\t".join(retina.COLUMNS)]
-    for body_id, cell_type, hex1, hex2 in rows:
+    for row in rows:
+        body_id, cell_type, hex1, hex2 = row[:4]
+        side = row[4] if len(row) > 4 else "R"
         lines.append(
             "\t".join(
                 [
@@ -69,6 +72,7 @@ def write_map(directory: Path, rows, name: str = "column_map.tsv") -> Path:
                     cell_type,
                     "null" if hex1 is None else str(hex1),
                     "null" if hex2 is None else str(hex2),
+                    "null" if side is None else side,
                 ]
             )
         )
@@ -93,6 +97,23 @@ class LoadTest(unittest.TestCase):
         with self.assertRaises(retina.RetinaError):
             retina.load_column_map(path)
 
+    def test_old_four_column_map_is_refused(self):
+        """side の列が無い古い表は読まない（書き出し直す）。"""
+        path = self.root / "old.tsv"
+        path.write_text("body_id\tcell_type\thex1\thex2\n1\tR1-R6\t0\t0\n", encoding="utf-8")
+        with self.assertRaises(retina.RetinaError):
+            retina.load_column_map(path)
+
+    def test_side_is_read(self):
+        path = write_map(self.root, [(1, "R1-R6", 0, 0, "L"), (2, "R1-R6", 1, 0, None)])
+        column_map = retina.load_column_map(path)
+        self.assertEqual([c.side for c in column_map.columns], ["L", None])
+
+    def test_bad_side_is_refused(self):
+        path = write_map(self.root, [(1, "R1-R6", 0, 0, "X")])
+        with self.assertRaises(retina.RetinaError):
+            retina.load_column_map(path)
+
     def test_duplicate_body_id_raises(self):
         path = write_map(self.root, [(1, "R1-R6", 0, 0), (1, "R8p", 1, 0)])
         with self.assertRaises(retina.RetinaError):
@@ -100,7 +121,7 @@ class LoadTest(unittest.TestCase):
 
     def test_non_integer_hex_raises(self):
         path = write_map(self.root, [(1, "R1-R6", 0, 0)])
-        path.write_text(path.read_text(encoding="utf-8").replace("R1-R6\t0\t0", "R1-R6\tx\t0"), encoding="utf-8")
+        path.write_text(path.read_text(encoding="utf-8").replace("R1-R6\t0\t0\t", "R1-R6\tx\t0\t"), encoding="utf-8")
         with self.assertRaises(retina.RetinaError):
             retina.load_column_map(path)
 
@@ -203,6 +224,8 @@ class ActivationTest(unittest.TestCase):
             {
                 "column_map_sha256",
                 "image_sha256",
+                "layout",
+                "sampling",
                 "field_px",
                 "luminance_count",
                 "blue_green_count",
@@ -212,8 +235,10 @@ class ActivationTest(unittest.TestCase):
 
 
 class FieldTest(unittest.TestCase):
+    """Phase 2 の置きかた（shared）と拾いかた（area）。"""
+
     def setUp(self):
-        self.cfg = helpers.load_config()
+        self.cfg = dataclasses.replace(helpers.load_config(), retina_layout="shared", retina_sampling="area")
         self.dir = TemporaryDirectory()
         self.root = Path(self.dir.name)
         self.addCleanup(self.dir.cleanup)
@@ -229,7 +254,7 @@ class FieldTest(unittest.TestCase):
             self.assertLessEqual(field.x0, field.x1)
             self.assertLessEqual(field.y0, field.y1)
 
-    def test_field_is_wider_than_one_pixel(self):
+    def test_area_field_is_wider_than_one_pixel(self):
         """気配の線は 1 画素の破線。点で拾うと当たるかどうかが運で決まる。"""
         out = retina.activations(self.cfg, image(self.cfg), self.map)
         self.assertGreater(out.field_w * out.field_h, 1)
@@ -251,6 +276,65 @@ class FieldTest(unittest.TestCase):
         img = image(self.cfg)
         field = retina.fields(self.cfg, column_map, img)[0]
         self.assertLessEqual(abs((field.x0 + field.x1) // 2 - img.width // 2), img.width // 4)
+
+
+class StonkflyLayoutTest(unittest.TestCase):
+    """Stonkfly の置きかた（split_eyes）と拾いかた（point）。agent.yaml の既定。"""
+
+    def setUp(self):
+        self.cfg = helpers.load_config()
+        self.dir = TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.addCleanup(self.dir.cleanup)
+        rows = lattice(4, side="L") + lattice(4, side="R")
+        self.map = retina.load_column_map(write_map(self.root, rows))
+
+    def test_defaults_follow_stonkfly(self):
+        self.assertEqual(self.cfg.retina_layout, "split_eyes")
+        self.assertEqual(self.cfg.retina_sampling, "point")
+        self.assertEqual(self.cfg.retina_r8_channel, "by_subtype")
+
+    def test_point_sampling_is_one_pixel(self):
+        for field in retina.fields(self.cfg, self.map, image(self.cfg)):
+            self.assertEqual((field.x0, field.y0), (field.x1, field.y1))
+
+    def test_eyes_take_left_and_right_parts(self):
+        """左眼は画像の左 60%、右眼は右 60% に置く。中央 20% が重なる。"""
+        img = image(self.cfg)
+        sides = {c.body_id: c.side for c in self.map.columns}
+        xs = {"L": [], "R": []}
+        for field in retina.fields(self.cfg, self.map, img):
+            xs[sides[field.body_id]].append(field.x0)
+        limit = self.cfg.retina_eye_width * (img.width - 1)
+        self.assertLessEqual(max(xs["L"]), limit)
+        self.assertGreaterEqual(min(xs["R"]), (1 - self.cfg.retina_eye_width) * (img.width - 1) - 1)
+        self.assertEqual(min(xs["L"]), 0)
+        self.assertEqual(max(xs["R"]), img.width - 1)
+
+    def test_right_eye_is_mirrored(self):
+        """右眼は左右を反転して置く。hex1 が大きいほど左へ寄る。"""
+        img = image(self.cfg)
+        by_id = {f.body_id: f.x0 for f in retina.fields(self.cfg, self.map, img)}
+        right = [c for c in self.map.columns if c.side == "R" and c.hex2 == 0]
+        low = min(right, key=lambda c: c.hex1)
+        high = max(right, key=lambda c: c.hex1)
+        self.assertGreater(by_id[low.body_id], by_id[high.body_id])
+
+    def test_cells_without_side_get_no_value(self):
+        rows = lattice(2, side="R") + [(999010, "R1-R6", 0, 0, None)]
+        column_map = retina.load_column_map(write_map(self.root, rows, "s.tsv"))
+        out = retina.activations(self.cfg, image(self.cfg), column_map)
+        self.assertNotIn(999010, out.currents)
+        self.assertEqual(out.unmapped_count, 1)
+        self.assertEqual(out.as_dict()["layout"], "split_eyes")
+
+    def test_r8_by_subtype(self):
+        """R8p は青、R8y は緑（Stonkfly と同じ）。"""
+        rgb = (0.1, 0.2, 0.3)
+        self.assertEqual(retina.blue_green(rgb, "by_subtype", "R8p"), 0.3)
+        self.assertEqual(retina.blue_green(rgb, "by_subtype", "R8y"), 0.2)
+        with self.assertRaises(retina.RetinaError):
+            retina.blue_green(rgb, "by_subtype", "R8_unclear")
 
 
 class ChannelTest(unittest.TestCase):

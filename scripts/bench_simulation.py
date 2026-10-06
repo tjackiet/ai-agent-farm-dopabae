@@ -8,21 +8,23 @@
 測るもの:
 
 - 網の準備: flat-connectome からの変換（初回だけ）と、キャッシュからの読み込み
-- 1 観測ぶん（`fly.simulation.neural_time_per_observation_sec`）のシミュレーション
+- 観測ごと（`fly.simulation.neural_time_per_observation_sec`）のシミュレーション。
+  状態を引き継いで `--observations` 回続ける（定期実行と同じ）
 - プロセスの最大メモリ
 
-入力は 2 種類。
+入力は `agent.yaml` の値どおり（Stonkfly と同じ。`docs/CONNECTOME_SURVEY.md` 1.1）。
 
 - 画像: 決定的に作った合成の 15 分足を `vision.py` で描き、`retina.py` で光受容細胞へ
-  落とし、明るさ × `--input-max-hz` のポアソン発火にする（Shiu ら 2024 の 150 Hz）
-- 背景（`--background-hz`）: 全細胞へ同じ発火率のポアソン入力を足す。**負荷試験である。**
-  網が活動したときの計算量を見るためで、モデルの選択ではない
+  落とし、明るさから作った電流にする
+- 背景の活動: ラミナへの一定電流（`fly.simulation.lamina`）
+- 負荷試験（`--background-hz`）: 全細胞へ同じ発火率のポアソン入力を足す。
+  網がもっと活動したときの計算量を見るためで、**モデルの選択ではない**
 
 使いかた:
 
-    python3 scripts/bench_simulation.py                       # 閾値なし・画像だけ
+    python3 scripts/bench_simulation.py                       # 閾値なし・負荷なし・2 観測
     python3 scripts/bench_simulation.py --threshold none --threshold 3 --threshold 5 \\
-        --background-hz 0 --background-hz 5 --background-hz 20
+        --background-hz 0 --background-hz 20
 
 結果は `var/bench/` に JSON で残る（Git 管理外）。
 **発注しない。取引所にも触れない。** 配線図データだけを使う。
@@ -47,10 +49,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dopabae import connectome, lif, retina, vision  # noqa: E402
 from dopabae.config import REPO_ROOT, Config, load  # noqa: E402
 
-# Shiu ら (2024) の入力。150 Hz のポアソン発火を、シナプス 250 個ぶんの重みで与える。
-# 画像の明るさ（0〜1）から発火率への直しかたは Phase 3 で決める（いまは計測のための仮置き）。
-DEFAULT_INPUT_MAX_HZ = 150.0
-DEFAULT_INPUT_WEIGHT_SYNAPSES = 250.0
+# 負荷試験のポアソン入力 1 発の重み（シナプス何個ぶんか）。Shiu ら (2024) の 250。
+DEFAULT_BACKGROUND_WEIGHT_SYNAPSES = 250.0
+
+# 観測ごとに数える細胞の群れ。網の下流まで届いたかを見るため。値の解釈はしない。
+GROUPS = {
+    "photoreceptors": {"names": ("R1-R6", "R8p", "R8y")},
+    "lamina": {"from_config": "lamina"},
+    "kc": {"prefix": "KC"},
+    "mbon": {"prefix": "MBON"},
+}
 
 
 def synthetic_candles(count: int, now_ms: int) -> tuple[vision.Candle, ...]:
@@ -74,8 +82,8 @@ def synthetic_candles(count: int, now_ms: int) -> tuple[vision.Candle, ...]:
     return tuple(candles)
 
 
-def image_drive(config: Config, network: connectome.Network, max_hz: float, weight_mv: float):
-    """合成の画像から光受容細胞への入力を作る。網に無い細胞は数えて落とす。"""
+def image_light(config: Config, network: connectome.Network) -> tuple[lif.Light, dict]:
+    """合成の画像から光受容細胞の明るさを作る。網に無い細胞は数えて落とす。"""
     import numpy as np
 
     now_ms = 1_789_430_400_000  # 固定。描く絵を毎回同じにする
@@ -86,29 +94,41 @@ def image_drive(config: Config, network: connectome.Network, max_hz: float, weig
     activations = retina.activations(config, image, column_map)
 
     body_ids = np.array(sorted(activations.currents), dtype=np.int64)
-    values = np.array([activations.currents[b] for b in body_ids], dtype=np.float64)
+    values = np.array([activations.currents[b] for b in body_ids], dtype=np.float32)
     index = network.index_of(body_ids)
     inside = index >= 0
-    drive = lif.Drive(index=index[inside], rate_hz=values[inside] * max_hz, weight_mv=weight_mv)
+    light = lif.Light(index=index[inside], value=values[inside])
     info = {
         "image_sha256": image.sha256,
         "column_map_sha256": column_map.sha256,
-        "receptors": int(len(body_ids)),
+        "retina": activations.as_dict(),
         "receptors_in_network": int(inside.sum()),
-        "mean_rate_hz": float(drive.rate_hz.mean()) if inside.any() else 0.0,
+        "mean_light": float(light.value.mean()) if inside.any() else 0.0,
     }
-    return drive, info
+    return light, info
 
 
-def with_background(network: connectome.Network, drive: lif.Drive, background_hz: float) -> lif.Drive:
-    """全細胞へ同じ発火率を足す（負荷試験）。画像の入力を受ける細胞は足し合わせる。"""
+def background_drive(network: connectome.Network, hz: float, weight_mv: float) -> lif.Drive | None:
+    """全細胞へ同じ発火率のポアソン入力（負荷試験）。"""
     import numpy as np
 
-    if background_hz <= 0:
-        return drive
-    rate = np.full(network.n_neurons, background_hz, dtype=np.float64)
-    np.add.at(rate, drive.index, drive.rate_hz)
-    return lif.Drive(index=np.arange(network.n_neurons), rate_hz=rate, weight_mv=drive.weight_mv)
+    if hz <= 0:
+        return None
+    return lif.Drive(
+        index=np.arange(network.n_neurons),
+        rate_hz=np.full(network.n_neurons, hz, dtype=np.float64),
+        weight_mv=weight_mv,
+    )
+
+
+def group_indices(config: Config, network: connectome.Network) -> dict:
+    out = {}
+    for name, rule in GROUPS.items():
+        if rule.get("from_config") == "lamina":
+            out[name] = network.type_index(tuple(config.simulation.lamina_types))
+        else:
+            out[name] = network.type_index(rule.get("names", ()), rule.get("prefix"))
+    return out
 
 
 def peak_rss_mb() -> float:
@@ -149,32 +169,38 @@ def main(argv: list[str] | None = None) -> int:
                         help="シナプス数の閾値（none / 整数）。複数指定可。既定は agent.yaml の値")
     parser.add_argument("--background-hz", type=float, action="append",
                         help="全細胞へのポアソン入力（負荷試験）。複数指定可。既定は 0 だけ")
+    parser.add_argument("--background-weight-synapses", type=float,
+                        default=DEFAULT_BACKGROUND_WEIGHT_SYNAPSES)
+    parser.add_argument("--observations", type=int, default=2,
+                        help="状態を引き継いで続ける観測の回数（既定 2）")
     parser.add_argument("--duration-ms", type=float, default=None,
-                        help="神経時間。既定は fly.simulation.neural_time_per_observation_sec")
-    parser.add_argument("--input-max-hz", type=float, default=DEFAULT_INPUT_MAX_HZ)
-    parser.add_argument("--input-weight-synapses", type=float, default=DEFAULT_INPUT_WEIGHT_SYNAPSES)
+                        help="1 観測の神経時間。既定は fly.simulation.neural_time_per_observation_sec")
     parser.add_argument("--seed", type=int, default=20261005)
     parser.add_argument("--out", type=Path, default=None, help="結果の JSON（既定は var/bench/）")
     args = parser.parse_args(argv)
+    if args.observations < 1:
+        parser.error("--observations は 1 以上")
 
     config = load()
     thresholds = args.threshold or [config.connectome_synapse_threshold]
     backgrounds = args.background_hz or [0.0]
     duration_ms = args.duration_ms or config.simulation.neural_time_sec * 1000.0
     params = lif.Params.from_settings(config.simulation)
-    weight_mv = args.input_weight_synapses * params.weight_per_synapse_mv
+    background_weight_mv = args.background_weight_synapses * params.weight_per_synapse_mv
 
     started_at = datetime.now(timezone.utc)
     report: dict = {
         "started_at": started_at.isoformat(),
         "machine": machine(),
         "duration_ms": duration_ms,
+        "observations": args.observations,
         "params": asdict(params),
-        "input": {"max_hz": args.input_max_hz, "weight_mv": weight_mv, "seed": args.seed},
+        "background": {"weight_mv": background_weight_mv, "seed": args.seed},
         "runs": [],
     }
     print(f"計算機: {report['machine']}")
-    print(f"神経時間: {duration_ms:g} ms / 刻み {params.dt_ms} ms（{params.steps_for(duration_ms)} 刻み）")
+    print(f"神経時間: 1 観測 {duration_ms:g} ms / 刻み {params.dt_ms} ms"
+          f"（{params.steps_for(duration_ms)} 刻み）× {args.observations} 観測")
 
     for threshold in thresholds:
         spec = connectome.spec_from_config(config, threshold)
@@ -185,10 +211,11 @@ def main(argv: list[str] | None = None) -> int:
             began = time.perf_counter()
             connectome.load(connectome.compiled_path(config, spec), spec)
             reload_sec = time.perf_counter() - began
-            drive, image_info = image_drive(config, network, args.input_max_hz, weight_mv)
+            light, image_info = image_light(config, network)
         except (connectome.ConnectomeError, retina.RetinaError, vision.VisionError) as exc:
             print(f"準備できません: {exc}", file=sys.stderr)
             return 1
+        groups = group_indices(config, network)
 
         label = "なし" if threshold is None else f"{threshold} 以上"
         print()
@@ -196,29 +223,37 @@ def main(argv: list[str] | None = None) -> int:
               f"シナプス {network.meta['n_synapses']:,}")
         print(f"  網の準備 {prepared:.1f} 秒（{'変換した' if built else 'キャッシュ'}）"
               f" / キャッシュの読み込み {reload_sec:.2f} 秒")
-        print(f"  画像の入力: 受容細胞 {image_info['receptors_in_network']:,} / {image_info['receptors']:,}"
-              f"（平均 {image_info['mean_rate_hz']:.1f} Hz）")
+        print(f"  画像の入力: 受容細胞 {image_info['receptors_in_network']:,}"
+              f"（平均の明るさ {image_info['mean_light']:.3f}）")
 
         for background in backgrounds:
-            result = lif.simulate(network, params, duration_ms,
-                                  with_background(network, drive, background), seed=args.seed)
-            mean_rate = result.total_spikes / network.n_neurons / (result.duration_ms / 1000.0)
-            print(f"  背景 {background:g} Hz: {result.wall_sec:.1f} 秒 / 発火 {result.total_spikes:,}"
-                  f"（平均 {mean_rate:.1f} Hz）/ 発火した細胞 {result.active_neurons:,}")
-            report["runs"].append({
-                "synapse_threshold": threshold,
-                "network": {k: v for k, v in network.meta.items() if k != "spec"},
-                "compiled": built,
-                "prepare_sec": round(prepared, 3),
-                "reload_sec": round(reload_sec, 3),
-                "image": image_info,
-                "background_hz": background,
-                "wall_sec": round(result.wall_sec, 3),
-                "total_spikes": result.total_spikes,
-                "input_spikes": result.input_spikes,
-                "active_neurons": result.active_neurons,
-                "mean_rate_hz": round(mean_rate, 3),
-            })
+            drive = background_drive(network, background, background_weight_mv)
+            state = None
+            for observation in range(args.observations):
+                result = lif.simulate(network, params, duration_ms, light=light, drive=drive,
+                                      state=state, seed=args.seed + observation)
+                state = result.state
+                mean_rate = result.total_spikes / network.n_neurons / (result.duration_ms / 1000.0)
+                by_group = {k: int(result.spike_counts[v].sum()) for k, v in groups.items()}
+                print(f"  背景 {background:g} Hz・観測 {observation + 1}: {result.wall_sec:.1f} 秒"
+                      f" / 発火 {result.total_spikes:,}（平均 {mean_rate:.1f} Hz）"
+                      f" / 発火した細胞 {result.active_neurons:,} / KC {by_group['kc']:,}")
+                report["runs"].append({
+                    "synapse_threshold": threshold,
+                    "network": {k: v for k, v in network.meta.items() if k != "spec"},
+                    "compiled": built,
+                    "prepare_sec": round(prepared, 3),
+                    "reload_sec": round(reload_sec, 3),
+                    "image": image_info,
+                    "background_hz": background,
+                    "observation": observation + 1,
+                    "wall_sec": round(result.wall_sec, 3),
+                    "total_spikes": result.total_spikes,
+                    "input_spikes": result.input_spikes,
+                    "active_neurons": result.active_neurons,
+                    "mean_rate_hz": round(mean_rate, 3),
+                    "spikes_by_group": by_group,
+                })
 
     report["peak_rss_mb"] = round(peak_rss_mb(), 1)
     report["max_runtime_sec"] = config.max_runtime_sec

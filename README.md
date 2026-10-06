@@ -193,11 +193,13 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 
 ```bash
 .venv/bin/python scripts/bench_simulation.py --threshold none --threshold 3 --threshold 5 \
-    --background-hz 0 --background-hz 5 --background-hz 20
+    --background-hz 0 --background-hz 20 --observations 3
 ```
 
-2026-10-05 に Linux（4 コア）で測った結果は 4.7〜30.4 秒で、1 回の判断の上限（120 秒）に
-収まりました（`docs/IMPLEMENTATION_PLAN.md` Phase 3「状態」）。
+網の作りかたと動かしかたは Stonkfly に合わせてあり、Stonkfly 本体を同じ画像で動かして
+発火数を突き合わせてあります。2026-10-05 に Linux（4 コア）で測った 1 観測の時間は 6〜9 秒
+（負荷試験で 14〜17 秒）で、1 回の判断の上限（120 秒）に収まりました
+（`docs/IMPLEMENTATION_PLAN.md` Phase 3「状態」）。
 
 ### 評価する
 

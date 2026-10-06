@@ -29,11 +29,11 @@ def receptor(body_id: int, cell_type: str = "R1-R6", side: str | None = "R") -> 
 
 # 標的。100 番台が右、200 番台が左。座標は左右で同じ値を使う（MaleCNS と同じ）。
 HEX = {
-    101: export.HexCell("R", 3, 4),
-    102: export.HexCell("R", 3, 4),
-    103: export.HexCell("R", 5, 1),
-    201: export.HexCell("L", 3, 4),
-    202: export.HexCell("L", 9, 9),
+    101: export.HexCell("R", 3, 4, "L1"),
+    102: export.HexCell("R", 3, 4, "L2"),
+    103: export.HexCell("R", 5, 1, "Mi1"),
+    201: export.HexCell("L", 3, 4, "L1"),
+    202: export.HexCell("L", 9, 9, "T1"),
 }
 
 
@@ -86,6 +86,24 @@ class AssignTest(unittest.TestCase):
         self.assertEqual((by_id(out)[1].hex1, by_id(out)[1].hex2), (5, 1))
         self.assertEqual(cross, 0)
 
+    def test_anchor_types_limit_the_targets(self):
+        """Stonkfly は R1-R6 を L1・L2・L3 への結合だけで決める。Mi1 への 9 個は数えない。"""
+        anchors = {"R1-R6": frozenset({"L1", "L2", "L3"})}
+        out, _ = export.assign({1: receptor(1)}, HEX, [(1, 101, 2), (1, 103, 9)], anchors)
+        self.assertEqual((by_id(out)[1].hex1, by_id(out)[1].hex2), (3, 4))
+        plain, _ = export.assign({1: receptor(1)}, HEX, [(1, 101, 2), (1, 103, 9)])
+        self.assertEqual((by_id(plain)[1].hex1, by_id(plain)[1].hex2), (5, 1))
+
+    def test_anchor_types_apply_only_to_listed_receptors(self):
+        anchors = {"R1-R6": frozenset({"L1"})}
+        out, _ = export.assign({1: receptor(1, "R8p")}, HEX, [(1, 103, 9)], anchors)
+        self.assertEqual(by_id(out)[1].reason, export.MAPPED)
+
+    def test_no_anchor_target_gets_no_value(self):
+        anchors = {"R1-R6": frozenset({"L1"})}
+        out, _ = export.assign({1: receptor(1)}, HEX, [(1, 103, 9)], anchors)
+        self.assertEqual(by_id(out)[1].reason, export.NO_TARGET)
+
     def test_output_is_sorted_and_complete(self):
         """決められなかった細胞も行は残す（数として記録に残るように）。"""
         receptors = {5: receptor(5), 1: receptor(1), 3: receptor(3)}
@@ -137,8 +155,8 @@ class TsvTest(unittest.TestCase):
         self.assertEqual(len(column_map.mapped), 2)
         self.assertEqual(column_map.unmapped_count, 1)
         self.assertEqual(
-            [(c.body_id, c.cell_type, c.hex1, c.hex2) for c in column_map.columns],
-            [(1, "R1-R6", 3, 4), (2, "R8p", 5, 1), (3, "R1-R6", None, None)],
+            [(c.body_id, c.cell_type, c.hex1, c.hex2, c.side) for c in column_map.columns],
+            [(1, "R1-R6", 3, 4, "R"), (2, "R8p", 5, 1, "R"), (3, "R1-R6", None, None, None)],
         )
 
     def test_header_matches_retina(self):
