@@ -84,8 +84,6 @@ def synthetic_candles(count: int, now_ms: int) -> tuple[vision.Candle, ...]:
 
 def image_light(config: Config, network: connectome.Network) -> tuple[lif.Light, dict]:
     """合成の画像から光受容細胞の明るさを作る。網に無い細胞は数えて落とす。"""
-    import numpy as np
-
     now_ms = 1_789_430_400_000  # 固定。描く絵を毎回同じにする
     candles = synthetic_candles(config.vision_lookback_candles, now_ms)
     last = candles[-1].close
@@ -93,17 +91,14 @@ def image_light(config: Config, network: connectome.Network) -> tuple[lif.Light,
     column_map = retina.load_column_map(REPO_ROOT / config.retina_column_map_path)
     activations = retina.activations(config, image, column_map)
 
-    body_ids = np.array(sorted(activations.currents), dtype=np.int64)
-    values = np.array([activations.currents[b] for b in body_ids], dtype=np.float32)
-    index = network.index_of(body_ids)
-    inside = index >= 0
-    light = lif.Light(index=index[inside], value=values[inside])
+    light, missing = lif.light_from_values(network, activations.currents)
     info = {
         "image_sha256": image.sha256,
         "column_map_sha256": column_map.sha256,
         "retina": activations.as_dict(),
-        "receptors_in_network": int(inside.sum()),
-        "mean_light": float(light.value.mean()) if inside.any() else 0.0,
+        "receptors_in_network": int(len(light.index)),
+        "receptors_not_in_network": missing,
+        "mean_light": float(light.value.mean()) if len(light.index) else 0.0,
     }
     return light, info
 

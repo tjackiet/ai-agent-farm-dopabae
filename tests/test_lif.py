@@ -262,6 +262,36 @@ class SimulateTest(unittest.TestCase):
             with self.assertRaises(lif.SimulationError):
                 lif.simulate(net, self.p, 10, light=bad)
 
+    def test_stimulus_drives_and_silences(self):
+        """外から足す一定電流。正なら発火させ、負ならラミナの背景の発火も止める。"""
+        net = network(2, [], types=["L1", "Mi1"])
+        idx = np.array([0, 1])
+        pushed = lif.simulate(net, self.p, 100, stimulus=lif.Stimulus(np.array([1]), 20.0))
+        self.assertGreater(pushed.spike_counts[1], 0)
+        held = lif.simulate(net, self.p, 100, stimulus=lif.Stimulus(idx, np.array([-30.0, 0.0])))
+        self.assertEqual(held.spike_counts[0], 0)
+
+    def test_stimulus_lasts_only_for_the_call(self):
+        net = network(1, [])
+        first = lif.simulate(net, self.p, 50, stimulus=lif.Stimulus(np.array([0]), 20.0))
+        after = lif.simulate(net, self.p, 50, state=first.state)
+        self.assertGreater(first.spike_counts[0], 0)
+        self.assertEqual(after.spike_counts[0], 0)
+
+    def test_bad_stimulus_is_refused(self):
+        net = network(2, [])
+        for bad in (lif.Stimulus(np.array([5]), 1.0), lif.Stimulus(np.array([0]), np.nan)):
+            with self.assertRaises(lif.SimulationError):
+                lif.simulate(net, self.p, 10, stimulus=bad)
+
+    def test_light_from_values_maps_body_ids(self):
+        """body_id の明るさを細胞番号へ。網に無い細胞は落として数える（値を作らない）。"""
+        net = network(3, [])  # body_id は 10 / 20 / 30
+        built, missing = lif.light_from_values(net, {30: 0.5, 10: 0.25, 99: 1.0})
+        self.assertEqual(built.index.tolist(), [0, 2])
+        self.assertEqual(built.value.tolist(), [0.25, 0.5])
+        self.assertEqual(missing, 1)
+
     def test_result_holds_only_observations(self):
         net = network(2, [(0, 1, 100)])
         result = lif.simulate(net, self.p, 20, drive=drive([0], 500.0), seed=1)

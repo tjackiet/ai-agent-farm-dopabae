@@ -141,6 +141,30 @@ class Light:
     value: Any  # numpy.ndarray[float]
 
 
+def light_from_values(network: Network, values: dict[int, float]) -> tuple[Light, int]:
+    """body_id → 明るさ（`retina.activations` の `currents`）から、網の細胞番号の明るさを作る。
+
+    網に無い細胞は落とし、その数を返す（値を作らない）。
+    """
+    np = _numpy()
+    body_ids = np.array(sorted(values), dtype=np.int64)
+    value = np.array([values[b] for b in body_ids], dtype=np.float32)
+    index = network.index_of(body_ids)
+    inside = index >= 0
+    return Light(index=index[inside], value=value[inside]), int((~inside).sum())
+
+
+@dataclass(frozen=True)
+class Stimulus:
+    """外から足す一定電流（mV 相当）。この呼び出しのあいだだけ流す。
+
+    Phase 5 の報酬・嫌悪の刺激（PAM11 / PPL101）や、計測で回路を止めるのに使う。
+    """
+
+    index: Any  # numpy.ndarray[int64]。網の細胞番号
+    current_mv: Any  # 1 つの値か、index と同じ長さの配列。負なら膜電位を下げる
+
+
 @dataclass(frozen=True)
 class Drive:
     """外からのポアソン入力。1 発ごとに x へ `weight_mv` を足す。**負荷試験のためのもの。**"""
@@ -279,6 +303,20 @@ def _check_light(network: Network, light: Light) -> tuple[Any, Any]:
     return index, np.clip(value, 0.0, 1.0)
 
 
+def _check_stimulus(network: Network, stimulus: Stimulus) -> Any:
+    """刺激を細胞ごとの一定電流の配列にする。同じ細胞が重なれば足し合わせる。"""
+    np = _numpy()
+    index = np.asarray(stimulus.index, dtype=np.int64)
+    current = np.broadcast_to(np.asarray(stimulus.current_mv, dtype=np.float32), index.shape)
+    if len(index) and (index.min() < 0 or index.max() >= network.n_neurons):
+        raise SimulationError("刺激の細胞番号が網の外を指しています")
+    if not np.isfinite(current).all():
+        raise SimulationError("刺激の電流に有限でない値があります")
+    extra = np.zeros(network.n_neurons, dtype=np.float32)
+    np.add.at(extra, index, current)
+    return extra
+
+
 def _check_drive(network: Network, params: Params, drive: Drive) -> tuple[Any, Any]:
     np = _numpy()
     index = np.asarray(drive.index, dtype=np.int64)
@@ -302,6 +340,7 @@ def simulate(
     *,
     light: Light | None = None,
     drive: Drive | None = None,
+    stimulus: Stimulus | None = None,
     state: State | None = None,
     seed: int = 0,
 ) -> Result:
@@ -349,6 +388,7 @@ def simulate(
     light_index = light_target = None
     if light is not None:
         light_index, light_target = _check_light(network, light)
+    extra = None if stimulus is None else _check_stimulus(network, stimulus)
 
     indptr = network.indptr
     post = network.post
@@ -376,7 +416,7 @@ def simulate(
             smoothed += alpha * (light_target - smoothed)
             st.light[light_index] = smoothed
             current[light_index] = params.photoreceptor_current(smoothed)
-        drive_term = one_minus_a * current
+        drive_term = one_minus_a * (current if extra is None else current + extra)
 
         for _ in range(chunk):
             t = st.clock
