@@ -224,10 +224,21 @@ def image_permutation_test(labels: list[str], values: list[float]) -> tuple[floa
     return observed, (extreme + 1) / (PERMUTATION_TRIALS + 1)
 
 
+def type_superclass(config: Config):
+    """型名 → superclass（型の中で最も多いもの）。配線図の注釈から引く。"""
+    import pyarrow.feather as feather
+
+    from dopabae.connectome import verified_input
+
+    table = feather.read_table(verified_input(config, "annotations"), columns=["type", "superclass"]).to_pandas()
+    return table.dropna(subset=["type"]).groupby("type").superclass.agg(
+        lambda s: s.mode().iloc[0] if len(s.mode()) else None
+    )
+
+
 def screen_types(config: Config, network: connectome.Network, records, top: int = 15) -> dict:
     """全型の画像による差の並べ替え検定（F 値と同順の群間平方和で比べる）。numpy で一度に回す。"""
     import numpy as np
-    import pyarrow.feather as feather
 
     shown = records[WARMUP:]
     charts = list(CHARTS)
@@ -254,12 +265,7 @@ def screen_types(config: Config, network: connectome.Network, records, top: int 
         extreme += between(rng.permutation(labels)) >= observed - 1e-9
     p_values = (extreme + 1) / (PERMUTATION_TRIALS + 1)
 
-    from dopabae.connectome import verified_input
-
-    table = feather.read_table(verified_input(config, "annotations"), columns=["type", "superclass"]).to_pandas()
-    superclass = table.dropna(subset=["type"]).groupby("type").superclass.agg(
-        lambda s: s.mode().iloc[0] if len(s.mode()) else None
-    )
+    superclass = type_superclass(config)
     by_superclass: dict[str, dict[str, int]] = {}
     for name, p in zip(names, p_values):
         key = str(superclass.get(name, "untyped") if name else "untyped")
