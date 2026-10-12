@@ -228,9 +228,11 @@ fly:
     sampling: point # point | area
     # area のときに 1 個が見る画素の範囲（正方形の一辺）。null は格子の目の粗さから決める。
     field_px: null
-    # shared のときに格子を画像へ置く向き。**複眼の視野との対応は未確認。**
+    # 格子を画像へ置く向き。**複眼の視野との対応は未確認。** flip_x は shared のときだけ効く。
     flip_x: false
-    flip_y: true # hex2 が増える向きを画像の上にする（split_eyes も同じ向き）
+    # hex2 が増える向きを画像の上にする（true。Stonkfly と同じ）。split_eyes でも効く。
+    # 光受容細胞は画像の上側に偏る（上半分に 73%）。false にすると偏りが下側へ移る。
+    flip_y: true
 
   vision:
     width: 320

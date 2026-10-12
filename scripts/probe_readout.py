@@ -160,6 +160,23 @@ def motion_record(config: Config) -> dict:
             "frames": 1 if config.vision_motion == "none" else config.vision_motion_frames}
 
 
+def rendering_record(config: Config) -> dict:
+    """結果の JSON に残す描きかた（配色・見せるもの）と、格子を画像へ置くやりかた。"""
+    return {
+        "palette": {key: list(rgb) for key, rgb in config.vision_palette.items()},
+        "show": list(config.vision_show),
+        "retina": {
+            "layout": config.retina_layout,
+            "eye_width": config.retina_eye_width,
+            "sampling": config.retina_sampling,
+            "field_px": config.retina_field_px,
+            "flip_x": config.retina_flip_x,
+            "flip_y": config.retina_flip_y,
+            "r8_channel": config.retina_r8_channel,
+        },
+    }
+
+
 def groups(network: connectome.Network) -> dict[str, dict]:
     out = {}
 
@@ -460,6 +477,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "permutation": {"trials": PERMUTATION_TRIALS, "seed": PERMUTATION_SEED, "statistic": "F"},
         "vision_motion": motion_record(config),
+        "rendering": rendering_record(config),
         "images": {name: [img.sha256 for img in frames] for name, frames in pictures.items()},
         "column_map_sha256": column_map.sha256,
         "wall_sec": {k: [r["wall_sec"] for r in v] for k, v in runs.items()},
