@@ -181,3 +181,60 @@ class MakeArmTest(unittest.TestCase):
         self.assertIn("var/arms/random", arm["agent"]["status_output"])
         # 元の辞書を壊していない。
         self.assertEqual(raw["direction"]["source"], "always_approach")
+
+    def _make_arm(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        try:
+            import make_arm
+        finally:
+            sys.path.pop(0)
+        import yaml
+
+        raw = yaml.safe_load((Path(__file__).resolve().parent.parent / "agent.yaml").read_text(encoding="utf-8"))
+        return make_arm, raw
+
+    def test_fly_arm_can_change_only_the_half_saturation(self):
+        make_arm, raw = self._make_arm()
+        arm = make_arm.build(raw, "fly-hs0.2", "fly", None, None, half_saturation=0.2)
+        self.assertEqual(arm["fly"]["simulation"]["photoreceptor_input"]["half_saturation"], 0.2)
+        # 檻とリスクは正本と同じ。
+        self.assertEqual(arm["strategy"], raw["strategy"])
+        self.assertEqual(arm["risk"], raw["risk"])
+        # 半飽和のほかの網の値は変えない。
+        base = make_arm.build(raw, "fly-hs0.2", "fly", None, None)
+        base["fly"]["simulation"]["photoreceptor_input"]["half_saturation"] = 0.2
+        self.assertEqual(arm, base)
+        # 元の辞書を壊していない。
+        self.assertEqual(raw["fly"]["simulation"]["photoreceptor_input"]["half_saturation"], 0.02)
+
+    def test_fly_arms_do_not_share_the_network_state(self):
+        """網の状態を腕ごとに分ける。分けないとハエ版の腕どうしが上書きし合う。"""
+        make_arm, raw = self._make_arm()
+        a = make_arm.build(raw, "fly", "fly", None, None)
+        b = make_arm.build(raw, "fly-hs0.2", "fly", None, None, half_saturation=0.2)
+        paths = {raw["fly"]["simulation"]["checkpoint_path"],
+                 a["fly"]["simulation"]["checkpoint_path"],
+                 b["fly"]["simulation"]["checkpoint_path"]}
+        self.assertEqual(len(paths), 3)
+
+    def test_arm_with_half_saturation_loads_as_config(self):
+        make_arm, raw = self._make_arm()
+        import yaml
+
+        from dopabae import config
+
+        arm = make_arm.build(raw, "fly-hs0.2", "fly", None, None, half_saturation=0.2)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "arm.yaml"
+            path.write_text(yaml.safe_dump(arm, allow_unicode=True), encoding="utf-8")
+            cfg = config.load(path)
+        self.assertEqual(cfg.simulation.input_half_saturation, 0.2)
+
+    def test_half_saturation_is_only_for_fly_arms(self):
+        """対照群は画像を見ないので、半飽和を変えても腕の差にならない。"""
+        script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"
+        for extra in (["--source", "random", "--half-saturation", "0.2"],
+                      ["--source", "fly", "--half-saturation", "0"]):
+            proc = subprocess.run([sys.executable, str(script), "x", *extra],
+                                  capture_output=True, text=True, check=False)
+            self.assertEqual(proc.returncode, 2, extra)
