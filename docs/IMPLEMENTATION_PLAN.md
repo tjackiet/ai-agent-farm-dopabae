@@ -589,8 +589,8 @@ python3 scripts/make_arm.py fly-hs1   --source fly --half-saturation 1.0
 python3 scripts/probe_readout.py --config arms/fly-hs0.2.yaml --screen
 ```
 
-環境は Linux x86_64・4 コア・Python 3.13・numpy 2.5。0.02 の腕は、10-06 の発火率・幅・揺れと
-全型の検定の表をそのまま再現した（p は群によって 0.01 未満だけ違った。DNp20 0.619 → 0.627 など。
+環境は Linux x86_64・4 コア・Python 3.13・numpy 2.5。3 つの腕とも 2 回回し、発火数と全型の検定は
+2 回で一致した。0.02 の腕は、10-06 の発火率・幅・揺れと全型の検定の表をそのまま再現した（p は群によって 0.01 未満だけ違った。DNp20 0.619 → 0.627 など。
 原因は確かめていない）。**ここに書くのは数字であり、どれを採るかは人間が決める。**
 
 **入力の電流。** 単独での発火率は、静止 −52 mV・閾値 −45 mV・膜の時定数 20 ms・不応期 2.2 ms の
@@ -638,7 +638,8 @@ python3 scripts/probe_readout.py --config arms/fly-hs0.2.yaml --screen
   （aMe12・aMe22・aMe24・aMe30・aMe6c）、LoVC23・SMP459 だった。aMe12 は R8 から興奮性の結合を受ける型である
   （Phase 3「合わせたもの」12）
 - 1.0 の p ≦ 0.001 は 49 型。中心脳が 21 型（AOTU045・AVLP594・CB1057・IB058・LAL191 など）、
-  下行性ニューロンが 1 型
+  下行性ニューロンが 1 型（DNp102、p = 0.001。読み出しの候補には入っていない型）。
+  0.02 の p ≦ 0.01 だった下行性ニューロンは DNpe027・DNd04 で、どれも重ならない
 - **型はこの画像の組で選んだものなので、読み出しに使うなら別の画像の組で確かめ直す**（「ハエ版の前に決めること」）
 - p ≦ 0.01 の型の一覧は `var/bench/readout-*.json` の `screen.p_le_0.01` に残る（Git 管理外）
 
