@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Sequence
 
@@ -277,6 +277,29 @@ def render(config: Config, candles: Sequence[Candle], bid: Decimal, ask: Decimal
         candles_to_ms=candles[-1].timestamp_ms,
         shown=tuple(shown),
     )
+
+
+def render_frames(config: Config, candles: Sequence[Candle], bid: Decimal, ask: Decimal, pair: str) -> tuple[Image, ...]:
+    """1 観測（神経時間）のあいだに見せる画像を、見せる順に返す（`fly.vision.motion`）。
+
+    - none: 静止画 1 枚。`render` と同じ
+    - grow_last: 最後の足の実体を、始値から終値まで `frames` 枚に分けて伸ばす。k 枚目の終値は
+      始値 + (終値 − 始値) × k / frames。高値・安値と気配は初めから最後の値で描くので、
+      値幅（縦の目盛り）と文字は動かない。最後の 1 枚は `render` と同じ画像になる
+
+    **動きの見せかたは設計者の読み替えである。** 伸ばす向きを決めるのは描画であり、ハエではない。
+    """
+    if config.vision_motion == "none":
+        return (render(config, candles, bid, ask, pair),)
+    if not candles:
+        raise VisionError("描く足がありません")
+    last = candles[-1]
+    n = config.vision_motion_frames
+    frames = []
+    for k in range(1, n + 1):
+        growing = replace(last, close=last.open + (last.close - last.open) * k / n)
+        frames.append(render(config, (*candles[:-1], growing), bid, ask, pair))
+    return tuple(frames)
 
 
 def to_png(image: Image) -> bytes:

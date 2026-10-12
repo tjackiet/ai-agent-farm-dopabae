@@ -252,6 +252,13 @@ fly:
       ask: [200, 120, 30]
     margin_px: 8 # 枠からの余白
     text_rows_px: 12 # 上部の文字行（ペア名・気配）に使う高さ
+    # 1 観測（神経時間）のあいだに見せる動き。none は静止画（Stonkfly と同じ）。
+    # grow_last は最後の足の実体を、始値から終値まで frames 枚に分けて伸ばす。ひげと気配は
+    # 初めから最後の値で描くので、値幅（縦の目盛り）と文字は動かない。
+    # **動きの見せかたは設計者の読み替えである。** ハエが動きを見分けている保証はない。
+    motion:
+      mode: none # none | grow_last
+      frames: 10 # 神経時間を等分した枚数。1 枚の長さは simulation.photoreceptor_input.chunk_ms の倍数
     receptors:
       luminance: [R1, R2, R3, R4, R5, R6] # 線形 sRGB 輝度
       color: [R8] # 青／緑の代理値

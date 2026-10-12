@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 import unittest
 from pathlib import Path
@@ -62,8 +63,23 @@ class ImageTest(unittest.TestCase):
     def test_images_are_distinct_and_deterministic(self):
         first = probe.images(self.cfg)
         second = probe.images(self.cfg)
-        self.assertEqual({k: v.sha256 for k, v in first.items()}, {k: v.sha256 for k, v in second.items()})
-        self.assertEqual(len({v.sha256 for v in first.values()}), len(first))
+        self.assertEqual({k: [f.sha256 for f in v] for k, v in first.items()},
+                         {k: [f.sha256 for f in v] for k, v in second.items()})
+        # 静止画（motion: none）は 1 枚ずつ
+        self.assertTrue(all(len(v) == 1 for v in first.values()))
+        self.assertEqual(len({v[0].sha256 for v in first.values()}), len(first))
+
+    def test_motion_shows_frames_and_blank_stays_still(self):
+        cfg = dataclasses.replace(self.cfg, vision_motion="grow_last", vision_motion_frames=10)
+        moving = probe.images(cfg)
+        still = probe.images(self.cfg)
+        self.assertEqual(len(moving[probe.BLANK]), 1)
+        for name in probe.CHARTS:
+            self.assertEqual(len(moving[name]), 10, name)
+            # 最後の枚は静止画と同じ
+            self.assertEqual(moving[name][-1].sha256, still[name][0].sha256, name)
+        self.assertEqual(probe.motion_record(cfg), {"mode": "grow_last", "frames": 10})
+        self.assertEqual(probe.motion_record(self.cfg), {"mode": "none", "frames": 1})
 
     def test_blank_has_only_background(self):
         blank = probe.blank_image(self.cfg)

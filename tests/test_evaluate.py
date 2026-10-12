@@ -230,6 +230,18 @@ class MakeArmTest(unittest.TestCase):
             cfg = config.load(path)
         self.assertEqual(cfg.simulation.input_half_saturation, 0.2)
 
+    def test_fly_arm_can_change_the_motion(self):
+        make_arm, raw = self._make_arm()
+        arm = make_arm.build(raw, "fly-grow", "fly", None, None, motion="grow_last")
+        self.assertEqual(arm["fly"]["vision"]["motion"]["mode"], "grow_last")
+        self.assertEqual(arm["strategy"], raw["strategy"])
+        self.assertEqual(arm["risk"], raw["risk"])
+        self.assertEqual(raw["fly"]["vision"]["motion"]["mode"], "none")
+        script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"
+        proc = subprocess.run([sys.executable, str(script), "x", "--source", "random", "--motion", "grow_last"],
+                              capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 2)
+
     def test_half_saturation_is_only_for_fly_arms(self):
         """対照群は画像を見ないので、半飽和を変えても腕の差にならない。"""
         script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"

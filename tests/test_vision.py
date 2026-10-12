@@ -127,3 +127,58 @@ class VisionTest(unittest.TestCase):
         flat = tuple(vision.Candle(i * 900_000, Decimal(100), Decimal(100), Decimal(100), Decimal(100)) for i in range(8))
         image = vision.render(self.cfg, flat, Decimal(100), Decimal(100), "btc_jpy")
         self.assertEqual(image.candle_count, 8)
+
+
+class MotionTest(unittest.TestCase):
+    """1 観測のあいだに見せる動き（fly.vision.motion）。"""
+
+    def setUp(self):
+        self.cfg = helpers.load_config()
+        self.grow = dataclasses.replace(self.cfg, vision_motion="grow_last", vision_motion_frames=5)
+        self.candles = candles()
+        self.bid, self.ask = Decimal(14_699_000), Decimal(14_701_000)
+
+    def test_none_is_the_still_image(self):
+        frames = vision.render_frames(self.cfg, self.candles, self.bid, self.ask, "btc_jpy")
+        still = vision.render(self.cfg, self.candles, self.bid, self.ask, "btc_jpy")
+        self.assertEqual([f.sha256 for f in frames], [still.sha256])
+
+    def test_grow_last_ends_at_the_still_image(self):
+        last = self.candles[-1]
+        big = (*self.candles[:-1], dataclasses.replace(last, close=last.open + 200_000, high=last.open + 210_000))
+        frames = vision.render_frames(self.grow, big, self.bid, self.ask, "btc_jpy")
+        still = vision.render(self.cfg, big, self.bid, self.ask, "btc_jpy")
+        self.assertEqual(len(frames), 5)
+        self.assertEqual(frames[-1].sha256, still.sha256)
+        # 実体が大きければ、枚ごとに画像が変わる（小さければ画素の丸めで同じ枚が続きうる）
+        self.assertEqual(len({f.sha256 for f in frames}), 5)
+
+    def test_grow_last_moves_only_the_last_candle(self):
+        """値幅（縦の目盛り）と文字は動かない。変わる画素は最後の足の列だけ。"""
+        frames = vision.render_frames(self.grow, self.candles, self.bid, self.ask, "btc_jpy")
+        w = self.cfg.vision_width
+        slot = (w - 2 * self.cfg.vision_margin_px) / len(self.candles)
+        last_left = int(self.cfg.vision_margin_px + slot * (len(self.candles) - 1))
+        for a, b in zip(frames, frames[1:]):
+            for i in range(0, len(a.pixels), 3):
+                if a.pixels[i:i + 3] != b.pixels[i:i + 3]:
+                    self.assertGreaterEqual((i // 3) % w, last_left)
+
+    def test_flat_last_candle_does_not_move(self):
+        flat = (*self.candles[:-1], dataclasses.replace(self.candles[-1], close=self.candles[-1].open))
+        frames = vision.render_frames(self.grow, flat, self.bid, self.ask, "btc_jpy")
+        self.assertEqual(len({f.sha256 for f in frames}), 1)
+
+    def test_growing_candle_keeps_its_color(self):
+        """伸びている途中の実体も、最後の足と同じ色（上昇か下落か）で描く。"""
+        last = self.candles[-1]
+        down = dataclasses.replace(last, close=last.open - 30_000, low=min(last.low, last.open - 40_000))
+        frames = vision.render_frames(self.grow, (*self.candles[:-1], down), self.bid, self.ask, "btc_jpy")
+        up_color = bytes(self.cfg.vision_palette["up"])
+        w = self.cfg.vision_width
+        slot = (w - 2 * self.cfg.vision_margin_px) / len(self.candles)
+        last_left = int(self.cfg.vision_margin_px + slot * (len(self.candles) - 1))
+        for f in frames:
+            for i in range(0, len(f.pixels), 3):
+                if (i // 3) % w >= last_left:
+                    self.assertNotEqual(f.pixels[i:i + 3], up_color)
