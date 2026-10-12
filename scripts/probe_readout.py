@@ -274,6 +274,9 @@ def screen_types(config: Config, network: connectome.Network, records, top: int 
         "by_superclass": dict(sorted(by_superclass.items(), key=lambda kv: -kv[1]["active"])),
         "top": [{"type": str(names[i]), "superclass": str(superclass.get(names[i])), "p": float(p_values[i])}
                 for i in order[:top]],
+        # p ≦ 0.01 の型をすべて残す。上位だけでは、どの下行性ニューロンが入ったかが分からない。
+        "p_le_0.01": [{"type": str(names[i]), "superclass": str(superclass.get(names[i])), "p": float(p_values[i])}
+                      for i in order if p_values[i] <= 0.01],
     }
 
 
