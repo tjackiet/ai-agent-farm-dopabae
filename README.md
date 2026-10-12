@@ -70,6 +70,7 @@ Phase 4 の評価基盤まで実装済み。
 │   ├── check_column_map.py # 座標表を点検する（読んで数えるだけ）
 │   ├── bench_simulation.py # 全脳の LIF シミュレーションの計算時間とメモリを測る
 │   ├── probe_readout.py    # 読み出しの候補が画像・点火でどう発火するかを測る（数字だけ）
+│   ├── validate_readout.py # 全型の検定で選んだ型を、別の画像の組で確かめ直す（数字だけ）
 │   ├── launchd/            # 15分ごとの定期実行（macOS）
 │   └── systemd/            # 同（Linux。cron の例も）
 ├── requirements.txt        # Python の依存。PyYAML のみ
@@ -102,6 +103,7 @@ Phase 4 の評価基盤まで実装済み。
 | `scripts/fetch_connectome.py` / `export_column_map.py` / `check_column_map.py` | 配線図データの取得、光受容細胞の座標表の書き出しと点検。データと表は Git 管理外 |
 | `scripts/bench_simulation.py` | 全脳を 1 観測ぶん（神経時間 0.5 秒）動かし、計算時間とメモリを測る。結果は `var/bench/` |
 | `scripts/probe_readout.py` | 読み出しの候補が、画像・嗅覚の回路の点火・観測の繰り返しでどう発火するかを測る。結論は書かない |
+| `scripts/validate_readout.py` | `probe_readout.py --screen` で選んだ型を、走らせる前に固定して別の画像の組で確かめ直す。結論は書かない |
 | `scripts/launchd/` / `systemd/` | 15分ごとの定期実行の雛形                                   |
 | `requirements.txt`            | Python の依存。PyYAML のみ。シミュレーションの依存は未確認の前提が確認できてから足す |
 | `requirements-connectome.txt` | 配線図とシミュレーションの依存（pyarrow / numpy）。対照群の腕の定期実行には要らない |
