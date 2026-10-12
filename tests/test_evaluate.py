@@ -242,6 +242,34 @@ class MakeArmTest(unittest.TestCase):
                               capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 2)
 
+    def test_fly_arm_can_change_the_palette_and_flip_y(self):
+        make_arm, raw = self._make_arm()
+        gray = [118, 118, 118]
+        arm = make_arm.build(raw, "fly-mono", "fly", None, None,
+                             palette={"up": gray, "down": gray}, flip_y=False)
+        self.assertEqual(arm["fly"]["vision"]["palette"]["up"], gray)
+        self.assertEqual(arm["fly"]["vision"]["palette"]["down"], gray)
+        self.assertEqual(arm["fly"]["vision"]["palette"]["wick"], raw["fly"]["vision"]["palette"]["wick"])
+        self.assertFalse(arm["fly"]["retina"]["flip_y"])
+        self.assertEqual(arm["strategy"], raw["strategy"])
+        self.assertEqual(arm["risk"], raw["risk"])
+        self.assertNotEqual(raw["fly"]["vision"]["palette"]["up"], gray)
+        self.assertTrue(raw["fly"]["retina"]["flip_y"])
+
+    def test_palette_is_parsed_strictly(self):
+        make_arm, _ = self._make_arm()
+        self.assertEqual(make_arm.parse_palette(["up=1,2,3"]), {"up": [1, 2, 3]})
+        for bad in ("up=1,2", "up=1,2,256", "sky=1,2,3", "up", "up=a,b,c"):
+            with self.assertRaises(ValueError, msg=bad):
+                make_arm.parse_palette([bad])
+        script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"
+        for extra in (["--source", "random", "--flip-y", "false"],
+                      ["--source", "cage", "--palette", "up=1,2,3"],
+                      ["--source", "fly", "--palette", "up=1,2"]):
+            proc = subprocess.run([sys.executable, str(script), "x", *extra],
+                                  capture_output=True, text=True, check=False)
+            self.assertEqual(proc.returncode, 2, extra)
+
     def test_half_saturation_is_only_for_fly_arms(self):
         """対照群は画像を見ないので、半飽和を変えても腕の差にならない。"""
         script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"

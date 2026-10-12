@@ -212,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cycles", type=int, default=8, help="6 種を何巡見せるか（既定 8）")
     parser.add_argument("--order-seed", type=int, default=ORDER_SEED, help="巡ごとの順序を決める種")
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument(
+        "--compare-rendering", action="store_true",
+        help="発見と配色・格子の置きかたが違う腕で、同じ型を見比べる（確かめ直しではなく比較。"
+             "半飽和・動き・網は同じでなければならない）",
+    )
     args = parser.parse_args(argv)
     if args.cycles < 2:
         parser.error("--cycles は 2 以上（揺れを測るため）")
@@ -234,6 +239,15 @@ def main(argv: list[str] | None = None) -> int:
     if found_motion != probe.motion_record(config):
         print(f"発見の動き（{found_motion}）と設定（{probe.motion_record(config)}）が違います", file=sys.stderr)
         return 1
+    # 配色・格子の置きかたが違えば、確かめ直しではなく別の腕どうしの比較になる。明示されたときだけ通す。
+    found_rendering = discovery.get("rendering")
+    rendering_differs = found_rendering is not None and found_rendering != probe.rendering_record(config)
+    if rendering_differs and not args.compare_rendering:
+        print("発見と配色・格子の置きかたが違います。違う腕で同じ型を見比べるなら --compare-rendering",
+              file=sys.stderr)
+        return 1
+    if found_rendering is None:
+        print("（発見の JSON に配色・置きかたの記録がありません。記録を始める前に作ったもの）")
     duration_ms = config.simulation.neural_time_sec * 1000.0
     seconds = duration_ms / 1000.0
     spec = connectome.spec_from_config(config)
@@ -272,6 +286,19 @@ def main(argv: list[str] | None = None) -> int:
     diff[active], direction_p[active] = direction_test(rates[active], labels, pair_index,
                                                        PERMUTATION_TRIALS, PERMUTATION_SEED)
     superclass = probe.type_superclass(config)
+    one_hot = np.eye(len(charts))[labels]
+    chart_means = (rates @ one_hot) / one_hot.sum(axis=0)  # 型 × 画像
+    all_types = {}
+    for i in np.flatnonzero(active):
+        by_chart = dict(zip(charts, chart_means[i]))
+        all_types[str(names[i])] = {
+            "superclass": str(superclass.get(names[i], "untyped") if names[i] else "untyped"),
+            "mean_hz": round(float(rates[i].mean()), 4),
+            "image_p": round(float(image_p[i]), 6),
+            "up_minus_down_hz": round(float(diff[i]), 4),
+            "direction_p": round(float(direction_p[i]), 6),
+            "pair_diffs_hz": [round(float(by_chart[u] - by_chart[d]), 4) for u, d in PAIRS],
+        }
     position = {str(n): i for i, n in enumerate(names)}
 
     def describe(i: int) -> dict:
@@ -386,6 +413,8 @@ def main(argv: list[str] | None = None) -> int:
         "permutation": {"trials": PERMUTATION_TRIALS, "seed": PERMUTATION_SEED,
                         "image": "between-group sum of squares", "direction": "|up − down|, within pairs"},
         "vision_motion": probe.motion_record(config),
+        "rendering": probe.rendering_record(config),
+        "compare_rendering": bool(args.compare_rendering),
         "images": {name: [img.sha256 for img in frames] for name, frames in pictures.items()},
         "column_map_sha256": column_map.sha256,
         "wall_sec": [r["wall_sec"] for r in records],
@@ -398,6 +427,8 @@ def main(argv: list[str] | None = None) -> int:
                    "direction_p_le_0.001": [str(names[i]) for i in np.flatnonzero(active)
                                             if direction_p[i] <= 0.001]},
         "mean_wall_sec": statistics.fmean(r["wall_sec"] for r in records),
+        # 発火した全型の数字。腕どうしで同じ型を見比べるために残す（確かめる型として選んだかどうかによらない）。
+        "all_types": all_types,
     }
     out = args.out or REPO_ROOT / "var" / "bench" / f"validate-{started:%Y%m%dT%H%M%SZ}.json"
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -69,6 +69,16 @@ class ImageTest(unittest.TestCase):
         self.assertTrue(all(len(v) == 1 for v in first.values()))
         self.assertEqual(len({v[0].sha256 for v in first.values()}), len(first))
 
+    def test_rendering_record_survives_json(self):
+        """確かめ直しは、発見の JSON から読んだ記録と今の設定の記録を比べる。往復で変わってはならない。"""
+        import json
+
+        record = probe.rendering_record(self.cfg)
+        self.assertEqual(json.loads(json.dumps(record)), record)
+        self.assertEqual(record["retina"]["flip_y"], True)
+        mono = dataclasses.replace(self.cfg, vision_palette={**self.cfg.vision_palette, "up": (118, 118, 118)})
+        self.assertNotEqual(probe.rendering_record(mono), record)
+
     def test_motion_shows_frames_and_blank_stays_still(self):
         cfg = dataclasses.replace(self.cfg, vision_motion="grow_last", vision_motion_frames=10)
         moving = probe.images(cfg)

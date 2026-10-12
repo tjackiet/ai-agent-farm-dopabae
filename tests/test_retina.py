@@ -320,6 +320,19 @@ class StonkflyLayoutTest(unittest.TestCase):
         high = max(right, key=lambda c: c.hex1)
         self.assertGreater(by_id[low.body_id], by_id[high.body_id])
 
+    def test_flip_y_mirrors_the_eyes_vertically(self):
+        """split_eyes でも flip_y が効く。false は true を上下に映した位置になる。"""
+        img = image(self.cfg)
+        up = {f.body_id: f.y0 for f in retina.fields(self.cfg, self.map, img)}
+        down = {f.body_id: f.y0 for f in retina.fields(dataclasses.replace(self.cfg, retina_flip_y=False), self.map, img)}
+        self.assertTrue(self.cfg.retina_flip_y)
+        self.assertEqual(set(up), set(down))
+        for body_id, y in up.items():
+            self.assertLessEqual(abs((img.height - 1 - y) - down[body_id]), 1, body_id)
+        xs_up = {f.body_id: f.x0 for f in retina.fields(self.cfg, self.map, img)}
+        xs_down = {f.body_id: f.x0 for f in retina.fields(dataclasses.replace(self.cfg, retina_flip_y=False), self.map, img)}
+        self.assertEqual(xs_up, xs_down)
+
     def test_cells_without_side_get_no_value(self):
         rows = lattice(2, side="R") + [(999010, "R1-R6", 0, 0, None)]
         column_map = retina.load_column_map(write_map(self.root, rows, "s.tsv"))

@@ -3,8 +3,8 @@
 
 腕とは、**方向の出どころだけが違う設定**のこと。設計メモ 4 章の評価 3・4 は
 腕どうしの比較で、replay（過去の足での再実行）ではない。ハエ版の腕は、網への
-入力のしかた（光受容細胞への入力の半飽和、1 観測のあいだに見せる動き）も変えられる。
-檻とリスクの値は変えない。`bitbank paper` の
+入力のしかた（光受容細胞への入力の半飽和、1 観測のあいだに見せる動き、配色、
+格子を画像へ置く上下の向き）も変えられる。檻とリスクの値は変えない。`bitbank paper` の
 約定判定を自前で真似ると、真似が本物とずれた分だけ評価が嘘になるためである。
 
 腕ごとに次を分ける。分けないと、同じペーパー口座と同じ判断ログを奪い合う。
@@ -20,6 +20,8 @@
     python3 scripts/make_arm.py fly        --source fly
     python3 scripts/make_arm.py fly-hs0.2  --source fly --half-saturation 0.2
     python3 scripts/make_arm.py fly-grow   --source fly --motion grow_last
+    python3 scripts/make_arm.py fly-mono   --source fly --palette up=118,118,118 --palette down=118,118,118
+    python3 scripts/make_arm.py fly-flipy  --source fly --flip-y false
 
 作った設定で回す:
 
@@ -46,6 +48,21 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARMS_DIR = REPO_ROOT / "arms"
 SOURCES = ("always_approach", "random", "fly")
+PALETTE_KEYS = ("background", "text", "up", "down", "wick", "bid", "ask")
+
+
+def parse_palette(items: list[str]) -> dict[str, list[int]]:
+    """`KEY=R,G,B` の並びを辞書にする。読めなければ ValueError。"""
+    out: dict[str, list[int]] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or key not in PALETTE_KEYS:
+            raise ValueError(f"--palette は {'|'.join(PALETTE_KEYS)}=R,G,B です: {item!r}")
+        parts = value.split(",")
+        if len(parts) != 3 or not all(p.strip().isdigit() and 0 <= int(p) <= 255 for p in parts):
+            raise ValueError(f"--palette の色は 0〜255 の 3 つの整数です: {item!r}")
+        out[key] = [int(p) for p in parts]
+    return out
 
 
 def build(
@@ -56,10 +73,13 @@ def build(
     weights: dict | None,
     half_saturation: float | None = None,
     motion: str | None = None,
+    palette: dict[str, list[int]] | None = None,
+    flip_y: bool | None = None,
 ) -> dict:
     """正本の agent.yaml から、腕ぶんの設定を組み立てる。
 
-    変えるのは方向の出どころ（ハエ版なら光受容細胞への入力の半飽和と、見せる動きも）と置き場所だけ。
+    変えるのは方向の出どころ（ハエ版なら光受容細胞への入力の半飽和・見せる動き・配色・
+    格子の上下の向きも）と置き場所だけ。
     檻とリスクの値は触らない。腕ごとに戦略が違うと、比べているものが方向の差でなくなる。
     """
     arm = json.loads(json.dumps(raw))  # 深い複製。元の辞書を壊さない
@@ -87,6 +107,10 @@ def build(
         arm["fly"]["simulation"]["photoreceptor_input"]["half_saturation"] = half_saturation
     if motion is not None:
         arm["fly"]["vision"]["motion"]["mode"] = motion
+    if palette:
+        arm["fly"]["vision"]["palette"].update(palette)
+    if flip_y is not None:
+        arm["fly"]["retina"]["flip_y"] = flip_y
     return arm
 
 
@@ -110,6 +134,15 @@ def main(argv=None) -> int:
         "--motion", default=None, choices=("none", "grow_last"),
         help="source=fly の 1 観測のあいだに見せる動き（fly.vision.motion.mode）。省けば正本と同じ",
     )
+    parser.add_argument(
+        "--palette", action="append", default=[], metavar="KEY=R,G,B",
+        help="source=fly の配色を差し替える（fly.vision.palette）。何度でも指定できる。"
+             "例: --palette up=118,118,118 --palette down=118,118,118",
+    )
+    parser.add_argument(
+        "--flip-y", default=None, choices=("true", "false"),
+        help="source=fly の格子を画像へ置く上下の向き（fly.retina.flip_y）。省けば正本と同じ",
+    )
     parser.add_argument("--config", default=None, help="元にする agent.yaml（既定はリポジトリ直下）")
     args = parser.parse_args(argv)
     if args.half_saturation is not None:
@@ -119,6 +152,13 @@ def main(argv=None) -> int:
             parser.error("--half-saturation は正の値")
     if args.motion is not None and args.source != "fly":
         parser.error("--motion は --source fly の腕だけで使う（対照群は画像を見ない）")
+    if (args.palette or args.flip_y is not None) and args.source != "fly":
+        parser.error("--palette と --flip-y は --source fly の腕だけで使う（対照群は画像を見ない）")
+    try:
+        palette = parse_palette(args.palette)
+    except ValueError as exc:
+        parser.error(str(exc))
+    flip_y = None if args.flip_y is None else args.flip_y == "true"
 
     weights = None
     if args.weights:
@@ -133,7 +173,7 @@ def main(argv=None) -> int:
 
     source_path = Path(args.config) if args.config else REPO_ROOT / "agent.yaml"
     raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-    arm = build(raw, args.name, args.source, args.seed, weights, args.half_saturation, args.motion)
+    arm = build(raw, args.name, args.source, args.seed, weights, args.half_saturation, args.motion, palette, flip_y)
 
     ARMS_DIR.mkdir(parents=True, exist_ok=True)
     target = ARMS_DIR / f"{args.name}.yaml"
@@ -142,6 +182,10 @@ def main(argv=None) -> int:
         parts.append(f"光受容細胞への入力の半飽和（{args.half_saturation:g}）")
     if args.motion is not None:
         parts.append(f"見せる動き（{args.motion}）")
+    if palette:
+        parts.append("配色（" + "・".join(f"{k}={','.join(map(str, v))}" for k, v in palette.items()) + "）")
+    if flip_y is not None:
+        parts.append(f"格子の上下の向き（flip_y: {args.flip_y}）")
     changed = "・".join(parts) + ("と置き場所" if len(parts) == 1 else "・置き場所")
     header = (
         f"# 評価の腕「{args.name}」（生成物。手で編集せず scripts/make_arm.py で作り直す）\n"

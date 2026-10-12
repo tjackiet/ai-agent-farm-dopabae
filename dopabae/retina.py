@@ -267,7 +267,11 @@ def _split_eye_uv(config: Config, placed: Sequence[Column]) -> list[tuple[float,
     """両眼を画像の左右に置く（Stonkfly と同じ。docs/CONNECTOME_SURVEY.md 1.1）。
 
     眼ごとに、輝度を受け取る型（R1-R6）の広がりを 0〜1 に引き伸ばし、左眼は画像の左
-    `eye_width`、右眼は右 `eye_width` に置く。右眼は左右を反転する。hex2 が増える向きが上。
+    `eye_width`、右眼は右 `eye_width` に置く。右眼は左右を反転する。
+
+    縦は `flip_y` に従う。true（既定。Stonkfly と同じ）は hex2 が増える向きが上、false は下。
+    光受容細胞は画像の上側に偏って置かれる（Phase 3「動きを見せる腕を測った」）ので、
+    false にすると偏りが下側へ移る。
     """
     plane = [_stonkfly_plane(c.hex1, c.hex2) for c in placed]  # type: ignore[arg-type]
     extent: dict[str, tuple[float, float, float, float]] = {}
@@ -288,7 +292,8 @@ def _split_eye_uv(config: Config, placed: Sequence[Column]) -> list[tuple[float,
         zx = 0.5 if x_span <= 0 else (px - x_lo) / x_span
         zy = 0.5 if y_span <= 0 else (py - y_lo) / y_span
         u = width * zx if column.side == "L" else (1.0 - width) + width * (1.0 - zx)
-        out.append((min(1.0, max(0.0, u)), min(1.0, max(0.0, 1.0 - zy))))
+        v = 1.0 - zy if config.retina_flip_y else zy
+        out.append((min(1.0, max(0.0, u)), min(1.0, max(0.0, v))))
     return out
 
 
