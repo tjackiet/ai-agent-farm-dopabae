@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 import unittest
 from pathlib import Path
@@ -32,8 +33,8 @@ class ImageSetTest(unittest.TestCase):
         """選んだ画像の組と同じ画像を使わない。"""
         self.assertFalse(set(validate.CHARTS) & set(probe.CHARTS))
         self.assertFalse(set(validate.CHARTS.values()) & set(probe.CHARTS.values()))
-        found = {v.sha256 for k, v in probe.images(self.cfg).items() if k != probe.BLANK}
-        mine = {v.sha256 for k, v in validate.images(self.cfg).items() if k != validate.BLANK}
+        found = {v[0].sha256 for k, v in probe.images(self.cfg).items() if k != probe.BLANK}
+        mine = {v[0].sha256 for k, v in validate.images(self.cfg).items() if k != validate.BLANK}
         self.assertFalse(found & mine)
 
     def test_pairs_are_mirrored_moves(self):
@@ -52,14 +53,25 @@ class ImageSetTest(unittest.TestCase):
         """文字（ペア名・気配の数字）の行は 6 種で同じ。文字の差が画像の差に混ざらない。"""
         width = self.cfg.vision_width
         rows = self.cfg.vision_margin_px + self.cfg.vision_text_rows_px
-        tops = {img.pixels[: rows * width * 3] for k, img in validate.images(self.cfg).items() if k != validate.BLANK}
+        tops = {img[0].pixels[: rows * width * 3] for k, img in validate.images(self.cfg).items()
+                if k != validate.BLANK}
         self.assertEqual(len(tops), 1)
 
     def test_images_are_distinct_and_deterministic(self):
         first = validate.images(self.cfg)
         second = validate.images(self.cfg)
-        self.assertEqual({k: v.sha256 for k, v in first.items()}, {k: v.sha256 for k, v in second.items()})
-        self.assertEqual(len({v.sha256 for v in first.values()}), len(first))
+        self.assertEqual({k: [f.sha256 for f in v] for k, v in first.items()},
+                         {k: [f.sha256 for f in v] for k, v in second.items()})
+        self.assertEqual(len({v[0].sha256 for v in first.values()}), len(first))
+
+    def test_motion_keeps_the_text_still(self):
+        """動きの枚でも、文字の行は 6 種・全枚で同じ。"""
+        cfg = dataclasses.replace(self.cfg, vision_motion="grow_last", vision_motion_frames=10)
+        width = cfg.vision_width
+        rows = cfg.vision_margin_px + cfg.vision_text_rows_px
+        tops = {f.pixels[: rows * width * 3] for k, frames in validate.images(cfg).items()
+                if k != validate.BLANK for f in frames}
+        self.assertEqual(len(tops), 1)
 
 
 class SequenceTest(unittest.TestCase):

@@ -242,6 +242,8 @@ class Config:
     vision_palette: dict[str, tuple[int, int, int]]
     vision_margin_px: int
     vision_text_rows_px: int
+    vision_motion: str
+    vision_motion_frames: int
     vision_path: str
 
     # 配線図（fly.connectome）。データはリポジトリに含めず、取得元と指紋だけを持つ。
@@ -275,6 +277,8 @@ R8_CHANNELS = ("by_subtype", "blue_green_mean", "blue", "green")
 # by_subtype で使える型と、渡す色（Stonkfly と同じ。p→Rh5・y→Rh6 は文献の知見）。
 R8_SUBTYPE_CHANNELS = {"R8p": "blue", "R8y": "green"}
 RETINA_LAYOUTS = ("split_eyes", "shared")
+# 1 観測のあいだに見せる動き。none は静止画（Stonkfly と同じ）。
+VISION_MOTIONS = ("none", "grow_last")
 RETINA_SAMPLINGS = ("point", "area")
 # 網に入れる細胞の選びかた。いまは Stonkfly と同じものだけ。
 NEURON_POLICIES = ("assigned_superclass",)
@@ -506,6 +510,20 @@ def load(path: Path | str | None = None) -> Config:
         if field_px <= 0:
             raise ConfigError("agent.yaml の fly.retina.field_px は 1 以上か null です")
 
+    simulation = _simulation(raw)
+    motion = _choice(raw, "fly.vision.motion.mode", VISION_MOTIONS)
+    motion_frames = _int(raw, "fly.vision.motion.frames")
+    if motion_frames < 1:
+        raise ConfigError("agent.yaml の fly.vision.motion.frames は 1 以上です")
+    # 1 枚の長さが入力の区切りの倍数でないと、枚の境目と明るさの更新がずれる。
+    frame_ms = simulation.neural_time_sec * 1000.0 / motion_frames
+    chunks = frame_ms / simulation.input_chunk_ms
+    if abs(chunks - round(chunks)) > 1e-9 or round(chunks) < 1:
+        raise ConfigError(
+            "agent.yaml の fly.vision.motion.frames は、神経時間を等分した 1 枚の長さが "
+            f"photoreceptor_input.chunk_ms の倍数になる枚数です（いま 1 枚 {frame_ms:g} ms）"
+        )
+
     halt = _num(raw, "risk.drawdown.halt_new_buys_pct")
     forced = _num(raw, "risk.drawdown.forced_exit_pct")
     if forced >= halt:
@@ -574,13 +592,15 @@ def load(path: Path | str | None = None) -> Config:
         vision_palette={key: _rgb(raw, f"fly.vision.palette.{key}") for key in PALETTE_KEYS},
         vision_margin_px=_int(raw, "fly.vision.margin_px"),
         vision_text_rows_px=_int(raw, "fly.vision.text_rows_px"),
+        vision_motion=motion,
+        vision_motion_frames=motion_frames,
         vision_path=_str(raw, "memory.vision.path"),
         connectome_source=_str(raw, "fly.connectome.source"),
         connectome_download_base=_download_base(raw),
         connectome_local_dir=_str(raw, "fly.connectome.local_dir"),
         connectome_files=_connectome_files(raw),
         connectome_synapse_threshold=_synapse_threshold(raw),
-        simulation=_simulation(raw),
+        simulation=simulation,
         retina_column_map_path=_str(raw, "fly.retina.column_map_path"),
         retina_luminance_types=luminance_types,
         retina_blue_green_types=blue_green_types,

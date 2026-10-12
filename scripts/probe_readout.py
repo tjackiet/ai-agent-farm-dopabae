@@ -7,7 +7,8 @@
 測りかた:
 
 - 画像: 決定的に作った合成のチャート 5 種（上昇・下落・横ばい・乱高下・急騰）と、
-  背景だけの無地。**どれも相場の観測ではない**
+  背景だけの無地。**どれも相場の観測ではない**。`fly.vision.motion` が none でなければ、
+  1 観測を等分して動きの枚を順に見せる（無地は動かない）
 - 順序: 状態を引き継ぎ、無地で 2 回ならしてから、5 種を `--cycles` 巡見せる
   （1 観測 = 神経時間 0.5 秒）。同じ画像を何度も見せるので、「画像による差」と
   「同じ画像の繰り返しでの揺れ」を比べられる
@@ -133,16 +134,30 @@ def blank_image(config: Config) -> vision.Image:
     )
 
 
-def images(config: Config) -> dict[str, vision.Image]:
+def images(config: Config) -> dict[str, tuple[vision.Image, ...]]:
+    """画像ごとに、1 観測のあいだに見せる枚を順に並べる（静止画なら 1 枚）。"""
     now_ms = 1_789_430_400_000
-    out = {BLANK: blank_image(config)}
+    out = {BLANK: (blank_image(config),)}
     for name, moves in CHARTS.items():
         candles = chart_candles(moves, now_ms)
         if len(candles) != config.vision_lookback_candles:
             raise SystemExit(f"合成のチャートは {config.vision_lookback_candles} 本で作る（いま {len(candles)} 本）")
         last = candles[-1].close
-        out[name] = vision.render(config, candles, last - 500, last + 500, config.pair)
+        out[name] = vision.render_frames(config, candles, last - 500, last + 500, config.pair)
     return out
+
+
+def to_lights(config: Config, network, column_map, pictures: dict[str, tuple[vision.Image, ...]]) -> dict:
+    """画像の枚ごとに、光受容細胞の明るさを作る。"""
+    return {name: tuple(lif.light_from_values(network, retina.activations(config, img, column_map).currents)[0]
+                        for img in frames)
+            for name, frames in pictures.items()}
+
+
+def motion_record(config: Config) -> dict:
+    """結果の JSON に残す動きの設定。発見と確かめ直しで照らし合わせる。"""
+    return {"mode": config.vision_motion,
+            "frames": 1 if config.vision_motion == "none" else config.vision_motion_frames}
 
 
 def groups(network: connectome.Network) -> dict[str, dict]:
@@ -186,13 +201,20 @@ def run(network, params, lights, sequence, condition, duration_ms, seed):
     state = None
     records = []
     for step, name in enumerate(sequence):
-        result = lif.simulate(network, params, duration_ms, light=lights[name],
-                              drive=drive if step == 0 else None, stimulus=stimulus,
-                              state=state, seed=seed + step)
-        state = result.state
-        records.append({"image": name, "counts": result.spike_counts, "wall_sec": result.wall_sec,
-                        "total_spikes": result.total_spikes})
-        print(f"    {step + 1:2d} {name:4s} {result.wall_sec:5.1f} 秒  発火 {result.total_spikes:>9,}", flush=True)
+        # 1 観測を枚数で等分し、状態を引き継いで順に見せる。1 枚なら分けずに 1 回で動かす。
+        frames = lights[name]
+        counts = None
+        wall = 0.0
+        for f, light in enumerate(frames):
+            result = lif.simulate(network, params, duration_ms / len(frames), light=light,
+                                  drive=drive if step == 0 else None, stimulus=stimulus,
+                                  state=state, seed=seed + step + 1_000_000 * f)
+            state = result.state
+            counts = result.spike_counts if counts is None else counts + result.spike_counts
+            wall += result.wall_sec
+        total = int(counts.sum(dtype="int64"))
+        records.append({"image": name, "counts": counts, "wall_sec": wall, "total_spikes": total})
+        print(f"    {step + 1:2d} {name:4s} {wall:5.1f} 秒  発火 {total:>9,}", flush=True)
     return records
 
 
@@ -355,13 +377,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     pictures = images(config)
-    lights = {name: lif.light_from_values(network, retina.activations(config, img, column_map).currents)[0]
-              for name, img in pictures.items()}
+    lights = to_lights(config, network, column_map, pictures)
     sequence = [BLANK] * WARMUP + list(CHARTS) * args.cycles
     group_map = groups(network)
 
     print(f"網: 細胞 {network.n_neurons:,} / 結合 {network.n_edges:,}（{spec.key()}）")
     print(f"光受容細胞への入力: {params.input_max_mv:g} × L / ({params.input_half_saturation:g} + L) mV")
+    print(f"動き: {config.vision_motion}（1 観測 {motion_record(config)['frames']} 枚）")
     print(f"順序: 無地 × {WARMUP} → チャート 5 種 × {args.cycles} 巡（各 {duration_ms:g} ms、状態を引き継ぐ）")
     runs = {}
     for key, label in CONDITIONS:
@@ -437,7 +459,8 @@ def main(argv: list[str] | None = None) -> int:
                         "weight_synapses": IGNITION_WEIGHT_SYNAPSES, "observations": [1]},
         },
         "permutation": {"trials": PERMUTATION_TRIALS, "seed": PERMUTATION_SEED, "statistic": "F"},
-        "images": {name: img.sha256 for name, img in pictures.items()},
+        "vision_motion": motion_record(config),
+        "images": {name: [img.sha256 for img in frames] for name, frames in pictures.items()},
         "column_map_sha256": column_map.sha256,
         "wall_sec": {k: [r["wall_sec"] for r in v] for k, v in runs.items()},
         "total_spikes": {k: [r["total_spikes"] for r in v] for k, v in runs.items()},

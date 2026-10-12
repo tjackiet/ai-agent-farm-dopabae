@@ -156,6 +156,31 @@ class ConnectomeConfigTest(unittest.TestCase):
             config_module.load(write(self.retina(luminance_anchor_types=[])))
         self.assertIsNone(config_module.load(write(self.retina(luminance_anchor_types=None))).retina_luminance_anchor_types)
 
+    def vision_motion(self, **changes) -> dict:
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["vision"]["motion"].update(changes)
+        return raw
+
+    def test_motion_defaults_to_still(self):
+        cfg = config_module.load()
+        self.assertEqual(cfg.vision_motion, "none")
+        self.assertEqual(cfg.vision_motion_frames, 10)
+
+    def test_rejects_unknown_motion(self):
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(self.vision_motion(mode="scroll")))
+
+    def test_rejects_frames_that_split_the_input_chunks(self):
+        """1 枚の長さが入力の区切り（10 ms）の倍数でないと、枚の境目と明るさの更新がずれる。"""
+        for frames in (0, 3, 100, 51):
+            with self.assertRaises(config_module.ConfigError, msg=frames):
+                config_module.load(write(self.vision_motion(mode="grow_last", frames=frames)))
+        for frames in (1, 5, 10, 25, 50):
+            cfg = config_module.load(write(self.vision_motion(mode="grow_last", frames=frames)))
+            self.assertEqual(cfg.vision_motion_frames, frames)
+
     def test_rejects_unknown_layout_and_sampling(self):
         for key, value in (("layout", "cyclops"), ("sampling", "bilinear")):
             with self.assertRaises(config_module.ConfigError, msg=key):

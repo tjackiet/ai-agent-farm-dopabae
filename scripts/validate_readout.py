@@ -93,14 +93,16 @@ def chart_candles(moves: tuple[int, ...], now_ms: int) -> tuple[vision.Candle, .
     return tuple(candles)
 
 
-def images(config: Config) -> dict[str, vision.Image]:
+def images(config: Config) -> dict[str, tuple[vision.Image, ...]]:
+    """画像ごとに、1 観測のあいだに見せる枚を順に並べる（静止画なら 1 枚）。"""
     now_ms = 1_789_430_400_000
-    out = {BLANK: probe.blank_image(config)}
+    out = {BLANK: (probe.blank_image(config),)}
     for name, moves in CHARTS.items():
         candles = chart_candles(moves, now_ms)
         if len(candles) != config.vision_lookback_candles:
             raise SystemExit(f"合成のチャートは {config.vision_lookback_candles} 本で作る（いま {len(candles)} 本）")
-        out[name] = vision.render(config, candles, Decimal(END_CLOSE - 500), Decimal(END_CLOSE + 500), config.pair)
+        out[name] = vision.render_frames(config, candles, Decimal(END_CLOSE - 500), Decimal(END_CLOSE + 500),
+                                         config.pair)
     return out
 
 
@@ -227,6 +229,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"発見の半飽和（{found_hs}）と設定（{params.input_half_saturation}）が違います。"
               "同じ網の同じ入力で確かめ直す", file=sys.stderr)
         return 1
+    # 動きの設定も同じでなければ、発見と同じ入力で確かめたことにならない（無い JSON は静止画で測ったもの）。
+    found_motion = discovery.get("vision_motion") or {"mode": "none", "frames": 1}
+    if found_motion != probe.motion_record(config):
+        print(f"発見の動き（{found_motion}）と設定（{probe.motion_record(config)}）が違います", file=sys.stderr)
+        return 1
     duration_ms = config.simulation.neural_time_sec * 1000.0
     seconds = duration_ms / 1000.0
     spec = connectome.spec_from_config(config)
@@ -244,11 +251,11 @@ def main(argv: list[str] | None = None) -> int:
     print("  " + "・".join(t["type"] for t in chosen))
 
     pictures = images(config)
-    lights = {name: lif.light_from_values(network, retina.activations(config, img, column_map).currents)[0]
-              for name, img in pictures.items()}
+    lights = probe.to_lights(config, network, column_map, pictures)
     order = sequence(args.cycles, args.order_seed)
     print(f"網: 細胞 {network.n_neurons:,} / 結合 {network.n_edges:,}（{spec.key()}）")
     print(f"光受容細胞への入力: {params.input_max_mv:g} × L / ({params.input_half_saturation:g} + L) mV")
+    print(f"動き: {config.vision_motion}（1 観測 {probe.motion_record(config)['frames']} 枚）")
     print(f"順序: 無地 × {WARMUP} → 6 種 × {args.cycles} 巡（巡ごとに入れ替える。種 {args.order_seed}）")
     records = probe.run(network, params, lights, order, "natural", duration_ms, seed=0)
 
@@ -378,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
         "duration_ms": duration_ms,
         "permutation": {"trials": PERMUTATION_TRIALS, "seed": PERMUTATION_SEED,
                         "image": "between-group sum of squares", "direction": "|up − down|, within pairs"},
-        "images": {name: img.sha256 for name, img in pictures.items()},
+        "vision_motion": probe.motion_record(config),
+        "images": {name: [img.sha256 for img in frames] for name, frames in pictures.items()},
         "column_map_sha256": column_map.sha256,
         "wall_sec": [r["wall_sec"] for r in records],
         "total_spikes": [r["total_spikes"] for r in records],
