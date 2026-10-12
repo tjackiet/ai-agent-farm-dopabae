@@ -32,6 +32,7 @@
 
     python3 scripts/probe_readout.py            # 4 巡
     python3 scripts/probe_readout.py --cycles 2 --screen
+    python3 scripts/probe_readout.py --config arms/fly-hs0.2.yaml --screen  # 腕の設定で測る
 
 結果は `var/bench/` に JSON で残る（Git 管理外）。
 **発注しない。取引所にも触れない。** 配線図データだけを使う。
@@ -273,6 +274,9 @@ def screen_types(config: Config, network: connectome.Network, records, top: int 
         "by_superclass": dict(sorted(by_superclass.items(), key=lambda kv: -kv[1]["active"])),
         "top": [{"type": str(names[i]), "superclass": str(superclass.get(names[i])), "p": float(p_values[i])}
                 for i in order[:top]],
+        # p ≦ 0.01 の型をすべて残す。上位だけでは、どの下行性ニューロンが入ったかが分からない。
+        "p_le_0.01": [{"type": str(names[i]), "superclass": str(superclass.get(names[i])), "p": float(p_values[i])}
+                      for i in order if p_values[i] <= 0.01],
     }
 
 
@@ -326,11 +330,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--screen", action="store_true", help="全型の検定（自然の観測で）も出す")
     parser.add_argument("--seed", type=int, default=20261006)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--config", type=Path, default=None,
+                        help="使う設定（既定はリポジトリ直下の agent.yaml。腕は scripts/make_arm.py で作る）")
     args = parser.parse_args(argv)
     if args.cycles < 2:
         parser.error("--cycles は 2 以上（揺れを測るため）")
 
-    config = load()
+    config = load(args.config)
     params = lif.Params.from_settings(config.simulation)
     duration_ms = config.simulation.neural_time_sec * 1000.0
     seconds = duration_ms / 1000.0
@@ -349,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     group_map = groups(network)
 
     print(f"網: 細胞 {network.n_neurons:,} / 結合 {network.n_edges:,}（{spec.key()}）")
+    print(f"光受容細胞への入力: {params.input_max_mv:g} × L / ({params.input_half_saturation:g} + L) mV")
     print(f"順序: 無地 × {WARMUP} → チャート 5 種 × {args.cycles} 巡（各 {duration_ms:g} ms、状態を引き継ぐ）")
     runs = {}
     for key, label in CONDITIONS:
@@ -410,7 +417,11 @@ def main(argv: list[str] | None = None) -> int:
     started = datetime.now(timezone.utc)
     report = {
         "started_at": started.isoformat(),
+        "config": str(args.config) if args.config else "agent.yaml",
         "network_key": spec.key(),
+        "params_key": params.key(),
+        "photoreceptor_input": {"max_mv": params.input_max_mv,
+                                "half_saturation": params.input_half_saturation},
         "sequence": sequence,
         "duration_ms": duration_ms,
         "conditions": {
