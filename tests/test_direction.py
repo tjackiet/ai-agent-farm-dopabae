@@ -37,14 +37,16 @@ class DirectionTest(unittest.TestCase):
         self.assertEqual(d.resolve(dataclasses.replace(cfg, direction_source="always_approach"), "r").value, d.APPROACH)
         self.assertTrue(d.resolve(dataclasses.replace(cfg, direction_source="random", direction_random_seed=7), "r").ok)
 
-    def test_fly_is_not_implemented_yet_and_fails_safely(self):
+    def test_fly_without_image_fails_safely(self):
+        """画像が描けなかった回は、ハエ版は方向を返さない（檻が HOLD にする）。"""
         cfg = dataclasses.replace(load_config(), direction_source="fly")
-        result = d.resolve(cfg, "r")
-        self.assertFalse(result.ok)
-        self.assertIsNone(result.value)
-        self.assertIn("Phase 3", result.error)
+        for frames in (None, ()):
+            result = d.resolve(cfg, "r", frames)
+            self.assertFalse(result.ok)
+            self.assertIsNone(result.value)
+            self.assertIn("画像", result.error)
 
     def test_as_dict_has_every_field(self):
         self.assertEqual(
-            set(d.always_approach().as_dict()), {"source", "value", "reason", "error", "seed"}
+            set(d.always_approach().as_dict()), {"source", "value", "reason", "error", "seed", "observation"}
         )

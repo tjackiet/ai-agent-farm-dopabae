@@ -48,6 +48,10 @@
 Stonkfly は**左右 DNp20 の差**（回転の癖）を売買に読み替えている。
 逃避回路（LC4 / LPLC2 → DNp01）は使っていない。
 
+**2026-10-12 追記：** 下の段落は当初の方針である。Phase 3 の測定で接近／回避の候補が画像に反応しなかったため、
+人間が **Stonkfly と同じ読み出し**に決めた（[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Phase 3「ハエ版を実装した」）。
+`|差| < 2 Hz` なら HOLD、DNpe017 が 0 回なら HOLD であることを Stonkfly のソース（`stonkfly/neural/controller.py`）で確かめた。
+
 ドパバエは Stonkfly と**別の読み出しを採る**（[`DESIGN_MEMO.md`](DESIGN_MEMO.md) 3.3 節）。
 接近／回避の回路をその意味のまま使うほうが、読み替えの恣意性が小さいと判断したためである。
 **これは設計者の選択であり、検証されていない。** Stonkfly 自身が

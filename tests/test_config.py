@@ -181,6 +181,38 @@ class ConnectomeConfigTest(unittest.TestCase):
             cfg = config_module.load(write(self.vision_motion(mode="grow_last", frames=frames)))
             self.assertEqual(cfg.vision_motion_frames, frames)
 
+    def readout(self, **changes) -> dict:
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["fly"]["readout"].update(changes)
+        return raw
+
+    def test_readout_follows_stonkfly(self):
+        """2026-10-12 に人間が決めた読み出し（Stonkfly と同じ）。"""
+        cfg = config_module.load()
+        self.assertEqual(cfg.readout_approach, ("DNp20:R",))
+        self.assertEqual(cfg.readout_avoid, ("DNp20:L",))
+        self.assertEqual((cfg.readout_approach_threshold_hz, cfg.readout_avoid_threshold_hz), (2.0, -2.0))
+        self.assertEqual(cfg.readout_gate, ("DNpe017",))
+        self.assertEqual(cfg.readout_gate_min_spikes, 1)
+        self.assertEqual(cfg.readout_record, ("lLN1_bc",))
+
+    def test_fly_source_needs_a_decided_readout(self):
+        raw = self.readout(approach_neurons=None)
+        raw["direction"]["source"] = "fly"
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+        # 対照群なら未決でも動く
+        raw["direction"]["source"] = "random"
+        self.assertIsNone(config_module.load(write(raw)).readout_approach)
+
+    def test_rejects_bad_readout_values(self):
+        for changes in ({"approach_neurons": ["DNp20:X"]}, {"approach_neurons": []}, {"avoid_neurons": "DNp20"},
+                        {"approach_threshold_hz": -1.0}, {"avoid_threshold_hz": 2.0}, {"gate_min_spikes": 0}):
+            with self.assertRaises(config_module.ConfigError, msg=changes):
+                config_module.load(write(self.readout(**changes)))
+
     def test_rejects_unknown_layout_and_sampling(self):
         for key, value in (("layout", "cyclops"), ("sampling", "bilinear")):
             with self.assertRaises(config_module.ConfigError, msg=key):

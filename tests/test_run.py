@@ -63,6 +63,30 @@ class CycleTest(unittest.TestCase):
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
+    def test_resolver_receives_the_frames_shown_to_the_fly(self):
+        seen = {}
+
+        def resolver(cfg, key, frames=None):
+            seen["frames"] = frames
+            return Direction(source="test", value=AVOID)
+
+        self.run_cycle(FakeCli(default_responses()), resolver=resolver)
+        self.assertEqual(len(seen["frames"]), 1)
+        record = self.journal()[-1]
+        self.assertEqual(record["vision"]["sha256"], seen["frames"][-1].sha256)
+
+    def test_slow_direction_holds(self):
+        """方向を得るまでに上限を超えたら、古い気配で発注しない。"""
+        from unittest import mock
+
+        clock = iter([0.0, 1.0] + [10_000.0] * 50)
+        with mock.patch("dopabae.run.time.monotonic", side_effect=lambda: next(clock)):
+            fake = FakeCli(default_responses())
+            cycle = self.run_cycle(fake)
+        self.assertEqual(cycle.action, "HOLD")
+        self.assertIn("方向を得るまでに", self.journal()[-1]["reason"])
+        self.assertFalse(any("create-order" in c for c in fake.calls))
+
     def test_always_approach_buys_and_records_direction_and_cage(self):
         fake = FakeCli(default_responses())
         cycle = self.run_cycle(fake)
@@ -89,7 +113,7 @@ class CycleTest(unittest.TestCase):
 
     def test_avoid_sells_position(self):
         fake = FakeCli(default_responses(assets=ASSETS_WITH_POSITION, pnl=POSITION_PNL, history=BUY_HISTORY))
-        cycle = self.run_cycle(fake, resolver=lambda cfg, key: Direction(source="test", value=AVOID))
+        cycle = self.run_cycle(fake, resolver=lambda cfg, key, frames=None: Direction(source="test", value=AVOID))
         self.assertEqual((cycle.action, cycle.cage), ("SELL", "sold"))
         self.assertTrue(any("--side=sell" in c for c in fake.calls))
 
@@ -107,14 +131,14 @@ class CycleTest(unittest.TestCase):
 
     def test_direction_failure_holds(self):
         fake = FakeCli(default_responses())
-        cycle = self.run_cycle(fake, resolver=lambda cfg, key: Direction(source="fly", value=None, error="見えなかった"))
+        cycle = self.run_cycle(fake, resolver=lambda cfg, key, frames=None: Direction(source="fly", value=None, error="見えなかった"))
         self.assertEqual((cycle.action, cycle.cage), ("HOLD", "no_direction"))
         self.assertTrue(any("方向を得られません" in w for w in cycle.warnings))
         self.assertFalse(any("create-order" in c for c in fake.calls))
 
     def test_never_builds_a_forbidden_command(self):
         fake = FakeCli(default_responses(assets=ASSETS_WITH_POSITION, pnl=POSITION_PNL, history=BUY_HISTORY))
-        self.run_cycle(fake, resolver=lambda cfg, key: Direction(source="test", value=AVOID))
+        self.run_cycle(fake, resolver=lambda cfg, key, frames=None: Direction(source="test", value=AVOID))
         for call in fake.calls:
             self.assertNotIn("bitbank trade", call)
             self.assertNotIn("paper reset", call)
