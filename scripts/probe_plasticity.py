@@ -60,6 +60,13 @@ CONDITIONS = {
     "all_zero": ("KC→すべての MBON を ×0（キノコ体の出力の上限）", {"scale": 0.0, "all_mbon": True}),
     "drive": ("MBON07/11 に +20 mV の一定電流（届くかの陽性対照）", {"current_mv": 20.0}),
     "silence": ("MBON07/11 に −500 mV の一定電流（出力を止める）", {"current_mv": -500.0}),
+    # Stonkfly の規則（stonkfly/neural/rule.py）は時間の順序で弱めも強めもし、元の 0.1〜2.0 倍に収める。
+    # PAM11 は KC→MBON07 だけ、PPL101 は KC→MBON11 だけを変える（circuit.py の区画の対応）。
+    # 学習が届きうる端を、区画ごとに測る。
+    "m07_low": ("KC→MBON07 だけ ×0.1（ごほうびの区画の下限）", {"scale_types": {"MBON07": 0.1}}),
+    "m07_high": ("KC→MBON07 だけ ×2.0（ごほうびの区画の上限）", {"scale_types": {"MBON07": 2.0}}),
+    "m11_low": ("KC→MBON11 だけ ×0.1（罰の区画の下限）", {"scale_types": {"MBON11": 0.1}}),
+    "m11_high": ("KC→MBON11 だけ ×2.0（罰の区画の上限）", {"scale_types": {"MBON11": 2.0}}),
 }
 RECORD = ("MBON07", "MBON11", "lLN1_bc")
 
@@ -121,6 +128,9 @@ def run_condition(config, network, params, lights, sequence, duration_ms, spec: 
     net, edges = (network, 0)
     if "scale" in spec:
         net, edges = scaled(network, kc, targets, spec["scale"])
+    for name, factor in spec.get("scale_types", {}).items():
+        net, changed = scaled(net, kc, network.type_index((name,)), factor)
+        edges += changed
     stimulus = lif.Stimulus(index=plastic, current_mv=spec["current_mv"]) if "current_mv" in spec else None
     seconds = duration_ms / 1000.0
     groups = {name: net.type_index((name,)) for name in RECORD}

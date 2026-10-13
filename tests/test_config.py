@@ -247,3 +247,63 @@ class ConnectomeConfigTest(unittest.TestCase):
         del raw["fly"]["connectome"]["files"]["weights"]
         with self.assertRaises(config_module.ConfigError):
             config_module.load(write(raw))
+
+
+class RewardConfigTest(unittest.TestCase):
+    """学習（fly.reward）。未決の値（null）のまま学習を入れられないこと。"""
+
+    def setUp(self):
+        import copy
+
+        self.raw = copy.deepcopy(config_module.load().raw)
+
+    def enabled(self, **reward):
+        import copy
+
+        raw = copy.deepcopy(self.raw)
+        raw["direction"]["source"] = "fly"
+        raw["fly"]["reward"]["enabled"] = True
+        raw["fly"]["reward"]["threshold_jpy"] = 500
+        raw["fly"]["reward"]["rule"]["memory_decay_sec"] = 1800
+        raw["fly"]["reward"]["rule"]["learn_when"] = "stimulus_only"
+        for key, value in reward.items():
+            if key.startswith("rule_"):
+                raw["fly"]["reward"]["rule"][key[5:]] = value
+            else:
+                raw["fly"]["reward"][key] = value
+        return raw
+
+    def test_repo_config_keeps_learning_off(self):
+        cfg = config_module.load()
+        self.assertFalse(cfg.reward.enabled)
+        self.assertEqual(cfg.reward.compartments, (("PAM11", "MBON07"), ("PPL101", "MBON11")))
+        self.assertEqual((cfg.reward.min_fraction, cfg.reward.max_fraction), (0.1, 2.0))
+
+    def test_enabled_needs_threshold_and_decay(self):
+        cfg = config_module.load(write(self.enabled()))
+        self.assertTrue(cfg.reward.enabled)
+        for key in ("threshold_jpy", "rule_memory_decay_sec", "rule_learn_when"):
+            with self.subTest(key=key), self.assertRaises(config_module.ConfigError):
+                config_module.load(write(self.enabled(**{key: None})))
+
+    def test_enabled_only_for_fly(self):
+        raw = self.enabled()
+        raw["direction"]["source"] = "always_approach"
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(raw))
+
+    def test_rejects_bad_bounds_and_pulse(self):
+        bad = {
+            "rule_min_fraction": 1.2,
+            "rule_max_fraction": 0.9,
+            "rule_trace_sec": 0,
+            "rule_memory_decay_sec": 0.01,
+            "threshold_jpy": -1,
+            "pulse_ms": 205,
+            "pulse_ms_long": 600,
+            "weight_snapshot_every_n": 0,
+            "rule_learn_when": "sometimes",
+        }
+        for key, value in bad.items():
+            with self.subTest(key=key), self.assertRaises(config_module.ConfigError):
+                config_module.load(write(self.enabled(**{key.replace("_long", ""): value})))

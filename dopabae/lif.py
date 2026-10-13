@@ -343,11 +343,15 @@ def simulate(
     stimulus: Stimulus | None = None,
     state: State | None = None,
     seed: int = 0,
+    learner: Any = None,
 ) -> Result:
     """網を `duration_ms` だけ動かし、細胞ごとの発火数と、動かしたあとの状態を返す。
 
     `state` を渡せばそこから続け、渡さなければ静止状態から始める。渡した状態は書き換えない。
     同じ網・値・入力・状態・種からは同じ結果が出る（乱数を使うのは `drive` だけ）。
+
+    `learner`（`plasticity.Learner`）を渡すと、入力の区切りごとに発火数を渡し、学習する結合の重みを
+    書き換えさせる（Phase 5）。学習の状態は learner が持ち、ここでは持たない。渡さなければ重みは変わらない。
     """
     np = _numpy()
     n = network.n_neurons
@@ -395,6 +399,10 @@ def simulate(
     weight = network.signed_count.astype(np.float32) * np.float32(params.weight_per_synapse_mv)
     fast = ~np.asarray(network.modulatory, dtype=bool)
     counts = np.zeros(n, dtype=np.int32)
+    learn_cells = None
+    if learner is not None:
+        learner.begin(weight)
+        learn_cells = learner.cells
 
     rng = np.random.default_rng(seed)
     drive_index = drive_prob = None
@@ -417,6 +425,7 @@ def simulate(
             st.light[light_index] = smoothed
             current[light_index] = params.photoreceptor_current(smoothed)
         drive_term = one_minus_a * (current if extra is None else current + extra)
+        before = counts[learn_cells].copy() if learn_cells is not None else None
 
         for _ in range(chunk):
             t = st.clock
@@ -464,6 +473,10 @@ def simulate(
                 if kc.size:
                     w[fired[is_kc[fired]]] += kc_jump
             st.clock += 1
+        if learner is not None:
+            # 区切りのあいだの発火から学習を進め、次の区切りの重みを書き換える（Stonkfly と同じく 10 ms ごと）。
+            spikes = (counts[learn_cells] - before).astype(np.float64)
+            learner.step(spikes, chunk * params.dt_ms / 1000.0, weight)
         done += chunk
     wall = time.perf_counter() - started
 

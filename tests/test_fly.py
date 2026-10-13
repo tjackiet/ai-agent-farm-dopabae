@@ -21,9 +21,11 @@ except ImportError:  # pragma: no cover - 依存が無い環境では飛ばす
     np = None
 
 if np is not None:
-    from dopabae import connectome, fly, lif
+    from dopabae import connectome, fly, lif, plasticity
 
 DNP20_L, DNP20_R, DNPE017 = 9001, 9002, 9003
+# 学習の場所（Phase 5）: KC 2 個、MBON07、MBON11、PAM11、PPL101
+KC_A, KC_B, MBON07, MBON11, PAM11, PPL101 = 9101, 9102, 9201, 9202, 9301, 9302
 
 
 def small_network(column_map: retina.ColumnMap, wire_to: int | None) -> "connectome.Network":
@@ -49,6 +51,35 @@ def small_network(column_map: retina.ColumnMap, wire_to: int | None) -> "connect
         side=np.array(sides, dtype=str),
         modulatory=np.zeros(len(body_ids), dtype=bool),
         meta={"key": f"fly-test-{wire_to}"},
+    )
+
+
+def learning_network(column_map: retina.ColumnMap) -> "connectome.Network":
+    """small_network に学習の場所を足した網。光受容細胞が KC を興奮させ、KC が MBON07/11 へつながる。"""
+    photo = sorted(c.body_id for c in column_map.mapped)
+    extra = [DNP20_L, DNP20_R, DNPE017, KC_A, KC_B, MBON07, MBON11, PAM11, PPL101]
+    body_ids = np.array(photo + extra, dtype=np.int64)
+    index = {int(b): i for i, b in enumerate(body_ids)}
+    edges = []
+    for b in photo:
+        edges += [(index[b], index[DNP20_R], 30), (index[b], index[DNPE017], 30), (index[b], index[KC_A], 30), (index[b], index[KC_B], 30)]
+    for kc in (KC_A, KC_B):
+        edges += [(index[kc], index[MBON07], 10), (index[kc], index[MBON11], 10)]
+    edges += [(index[PAM11], index[MBON07], 5), (index[PPL101], index[MBON11], 5)]
+    pre, post, signed = zip(*edges)
+    indptr, post_sorted, signed_sorted = connectome.build_csr(len(body_ids), list(pre), list(post), list(signed))
+    mapped = sorted(column_map.mapped, key=lambda c: c.body_id)
+    types = [c.cell_type for c in mapped] + ["DNp20", "DNp20", "DNpe017", "KCg", "KCg", "MBON07", "MBON11", "PAM11", "PPL101"]
+    sides = [c.side for c in mapped] + ["L", "R", "R"] + ["R"] * 6
+    return connectome.Network(
+        body_ids=body_ids,
+        indptr=indptr,
+        post=post_sorted,
+        signed_count=signed_sorted,
+        cell_type=np.array(types, dtype=str),
+        side=np.array(sides, dtype=str),
+        modulatory=np.array([t in ("PAM11", "PPL101") for t in types]),
+        meta={"key": "fly-test-learning"},
     )
 
 
@@ -173,6 +204,89 @@ class DecideTest(unittest.TestCase):
             fly.decide(self.cfg, (), network=net, column_map=self.map, repo_root=self.root)
         with self.assertRaises(fly.FlyError):
             self.decide(net, cfg=dataclasses.replace(self.cfg, readout_approach=None))
+
+
+
+@unittest.skipIf(np is None, "numpy が無い")
+class LearningTest(unittest.TestCase):
+    """学習（Phase 5）。入れていなければ何も変わらず、入れれば記憶が残って引き継がれる。"""
+
+    def setUp(self):
+        self.dir = TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.root = Path(self.dir.name)
+        self.map = retina.load_column_map(write_map(self.root, lattice(2) + lattice(2, side="L")))
+        base = dataclasses.replace(helpers.load_config(), direction_source="fly", readout_record=None)
+        self.off = base
+        self.on = dataclasses.replace(
+            base,
+            reward=dataclasses.replace(
+                base.reward, enabled=True, threshold_jpy=500.0, memory_decay_sec=1800.0, weight_snapshot_every_n=2,
+                learn_when="always",
+            ),
+        )
+        self.frames = (image(base),)
+        self.net = learning_network(self.map)
+
+    def decide(self, cfg, stimulus="none"):
+        return fly.decide(cfg, self.frames, stimulus=stimulus, network=self.net, column_map=self.map, repo_root=self.root)
+
+    def test_without_learning_nothing_is_learned(self):
+        result = self.decide(self.off)
+        self.assertIsNone(result.observation["learning"])
+        self.assertFalse((self.root / self.off.reward.memory_path).exists())
+        with self.assertRaises(fly.FlyError):
+            self.decide(self.off, stimulus="reward")
+
+    def test_learning_is_recorded_and_carried(self):
+        first = self.decide(self.on, stimulus="reward")
+        learning = first.observation["learning"]
+        self.assertEqual(learning["stimulus"], "reward")
+        self.assertEqual(learning["pulse_cells"], [PAM11])
+        self.assertEqual(learning["memory_from"], "rest")
+        self.assertEqual(learning["observations"], 1)
+        self.assertEqual(learning["plastic_edges"], 4)
+        self.assertIsNone(learning["snapshot"])
+        self.assertTrue((self.root / self.on.reward.memory_path).exists())
+
+        second = self.decide(self.on)
+        learning = second.observation["learning"]
+        self.assertEqual(learning["stimulus"], "none")
+        self.assertIsNone(learning["pulse_cells"] or None)
+        self.assertEqual(learning["memory_from"], "carried")
+        self.assertEqual(learning["observations"], 2)
+        self.assertEqual(learning["snapshot"], "memory-000002.npz")
+
+    def test_memory_of_other_rule_is_not_read(self):
+        """規則の値が違う記憶は読まない（失敗にして HOLD。ファイルは残す）。"""
+        self.decide(self.on)
+        other = dataclasses.replace(self.on, reward=dataclasses.replace(self.on.reward, max_fraction=3.0))
+        with self.assertRaises(plasticity.PlasticityError):
+            self.decide(other)
+        self.assertTrue((self.root / self.on.reward.memory_path).exists())
+
+    def test_stimulus_only_does_not_learn_without_stimulus(self):
+        """learn_when が stimulus_only なら、刺激の無い観測では重みが動かない。"""
+        cfg = dataclasses.replace(self.on, reward=dataclasses.replace(self.on.reward, learn_when="stimulus_only"))
+        quiet = self.decide(cfg).observation["learning"]
+        self.assertFalse(quiet["plastic"])
+        self.assertEqual(quiet["changed_edges"], 0)
+        self.assertEqual(set(quiet["by_mbon"]), {"MBON07", "MBON11"})
+        self.assertTrue(self.decide(cfg, stimulus="aversive").observation["learning"]["plastic"])
+
+    def test_reset_memory_matches_the_fixed_network(self):
+        """学習の状態を消せば（重みが元のまま）、刺激の無い観測は学習なしの網と同じ発火になる（完了の目安）。"""
+        cfg = dataclasses.replace(self.on, reward=dataclasses.replace(self.on.reward, learn_when="stimulus_only"))
+        with TemporaryDirectory() as other:
+            fixed = fly.decide(self.off, self.frames, network=self.net, column_map=self.map, repo_root=Path(other))
+        fresh = self.decide(cfg)
+        for key in ("approach_hz", "avoid_hz", "gate_spikes", "total_spikes", "active_neurons"):
+            self.assertEqual(fresh.observation[key], fixed.observation[key], key)
+        self.assertEqual(fresh.value, fixed.value)
+
+    def test_unknown_stimulus_is_refused(self):
+        with self.assertRaises(fly.FlyError):
+            self.decide(self.on, stimulus="money")
 
 
 if __name__ == "__main__":

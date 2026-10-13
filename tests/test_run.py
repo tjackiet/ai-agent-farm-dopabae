@@ -75,6 +75,78 @@ class CycleTest(unittest.TestCase):
         record = self.journal()[-1]
         self.assertEqual(record["vision"]["sha256"], seen["frames"][-1].sha256)
 
+    def learning_config(self):
+        cfg = dataclasses.replace(self.config, direction_source="fly")
+        return dataclasses.replace(
+            cfg,
+            reward=dataclasses.replace(
+                cfg.reward, enabled=True, threshold_jpy=500.0, memory_decay_sec=1800.0, learn_when="stimulus_only"
+            ),
+        )
+
+    def test_without_learning_no_stimulus_is_judged(self):
+        self.run_cycle(FakeCli(default_responses()), resolver=lambda cfg, key, frames=None: Direction(source="test", value=AVOID))
+        self.assertIsNone(self.journal()[-1]["reinforcement"])
+        self.assertFalse((self.root / self.config.reward.ledger_path).exists())
+
+    def test_settled_profit_becomes_a_reward_once(self):
+        """決済が確定した回だけ報酬を出し、台帳に書いて二度は出さない。最初の回は前の決済を使わない。"""
+        cfg = self.learning_config()
+        closed = BUY_HISTORY + [
+            {"id": "t2", "pair": "btc_jpy", "side": "sell", "type": "limit", "amount": 0.0068,
+             "fillPrice": 14700000, "feeQuote": 0, "filledAt": "2026-09-14T06:00:00.000Z"}
+        ]
+        seen = []
+
+        def resolver(cfg, key, frames=None, stimulus="none"):
+            seen.append(stimulus)
+            return Direction(source="fly", value=AVOID)
+
+        ledger = self.root / cfg.reward.ledger_path
+        self.run_cycle(FakeCli(default_responses(history=closed)), config=cfg, resolver=resolver)
+        self.assertEqual(seen[-1], "none")  # 学習を入れた最初の回
+        first = self.journal()[-1]["reinforcement"]
+        self.assertIn("最初の回", first["reason"])
+        self.assertTrue(ledger.exists())
+
+        ledger.write_text('{"last_closed_at": null}\n', encoding="utf-8")  # この決済はまだ使っていないことにする
+        self.run_cycle(FakeCli(default_responses(history=closed)), config=cfg, resolver=resolver)
+        self.assertEqual(seen[-1], "reward")
+        record = self.journal()[-1]["reinforcement"]
+        self.assertEqual(record["stimulus"], "reward")
+        self.assertAlmostEqual(record["realized_pnl_jpy"], 1020, delta=1)
+        self.assertEqual(record["closed_rounds"], 1)
+
+        self.run_cycle(FakeCli(default_responses(history=closed)), config=cfg, resolver=resolver)
+        self.assertEqual(seen[-1], "none")  # 同じ決済で二度は出さない
+
+    def test_failed_direction_does_not_consume_the_settlement(self):
+        """ハエが刺激を受け取れなかった回は台帳を進めない（次の回にもう一度使う）。"""
+        cfg = self.learning_config()
+        ledger = self.root / cfg.reward.ledger_path
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text('{"last_closed_at": null}\n', encoding="utf-8")
+        closed = BUY_HISTORY + [
+            {"id": "t2", "pair": "btc_jpy", "side": "sell", "type": "limit", "amount": 0.0068,
+             "fillPrice": 14700000, "feeQuote": 0, "filledAt": "2026-09-14T06:00:00.000Z"}
+        ]
+        cycle = self.run_cycle(
+            FakeCli(default_responses(history=closed)),
+            config=cfg,
+            resolver=lambda cfg, key, frames=None, stimulus="none": Direction(source="fly", value=None, error="見えなかった"),
+        )
+        self.assertEqual(cycle.action, "HOLD")
+        self.assertEqual(json.loads(ledger.read_text(encoding="utf-8")), {"last_closed_at": None})
+
+    def test_broken_ledger_holds(self):
+        cfg = self.learning_config()
+        ledger = self.root / cfg.reward.ledger_path
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text("{", encoding="utf-8")
+        cycle = self.run_cycle(FakeCli(default_responses()), config=cfg, resolver=lambda *a, **k: Direction(source="fly", value=AVOID))
+        self.assertEqual(cycle.action, "HOLD")
+        self.assertIn("台帳", cycle.reason)
+
     def test_slow_direction_holds(self):
         """方向を得るまでに上限を超えたら、古い気配で発注しない。"""
         from unittest import mock
