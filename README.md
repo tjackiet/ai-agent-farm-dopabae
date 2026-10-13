@@ -173,8 +173,8 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 .venv/bin/python -m dopabae.run --dry-run
 ```
 
-`--dry-run` は発注せず、組み立てた注文だけを出力します。`agent.yaml` の `runtime.dry_run` も
-既定で `true` です。ペーパー口座へ実際に出すかは、人間が 1 周の出力を見てから決めます。
+`--dry-run` は発注せず、組み立てた注文だけを出力します。`agent.yaml` の `runtime.dry_run` は
+2026-10-13 から `false` で、注文をペーパー口座へ出します（Mac で 1 周の出力を見てから人間が切り替えた）。
 実資金には、どちらでも影響しません（paper は公開 API しか叩きません）。
 
 ### 配線図を用意する

@@ -206,6 +206,7 @@ Phase の順序は入れ替えない。Phase 5 を Phase 4 より先に始めな
 | 記録 | 判断ログ・`var/status.yaml`・`var/performance.yaml` が書かれた |
 
 CLI の版差（3 節 8）はこれで潰れた。`dry_run` を外すかどうかは人間が判断する。
+**2026-10-13 に人間が `runtime.dry_run: false` に決めた**（Phase 4「状態」）。
 
 ### Phase 2：チャート描画と光受容細胞へのマッピング
 
@@ -1106,8 +1107,8 @@ BITBANK_PAPER_STATE_PATH=var/arms/fly-hs1/paper-state.json bitbank paper init --
 ```
 
 判断ログ（`var/arms/<腕>/memory/decisions/<日付>.jsonl`）の `direction.observation` に発火の値が残り、
-`direction.error` が `null` であることを見る。`runtime.dry_run` は正本の値（いまは `true`）のままで、
-ペーパー口座へ出すかどうかは人間が決める（Phase 1「状態」）。
+`direction.error` が `null` であることを見る。`runtime.dry_run` は正本の値に従う
+（2026-10-13 に `false` に切り替えた。Phase 4「状態」）。
 
 **4. 定期実行に任せる。** `scripts/run_arms.py` は `arms/*.yaml` を全部並行に回す（腕ごとの上限 600 秒）。
 ハエ版は 1 本 10 秒前後なので、15 分間隔に収まる。
@@ -1144,9 +1145,9 @@ APPROACH と AVOID の件数がそろうまで日数がかかる。**評価で�
 | `fly-hs1` | ハエ版・半飽和 1.0 | 2026-10-13 10:13 |
 
 - **比べる期間は 2026-10-13 10:20（3 本がそろった時刻）から。** それより前の回は `--since` で外す
-- `runtime.dry_run: true` のまま回している。方向の頻度と方向のあとの値動き（評価 4 の中心）は見られるが、
-  約定しないので檻の扱いと成績（総資産・ドローダウン）は比べられない。ペーパー口座へ出すかは人間が決める。
-  切り替えたら、比べる期間はその時刻から取り直す
+- 回し始めは `runtime.dry_run: true` だった。これでは約定しないので、檻の扱いと成績（総資産・ドローダウン）は
+  比べられない。**同日、人間が `runtime.dry_run: false` に決めた。** 腕を作り直した時刻から、注文がペーパー口座に出る。
+  **比べる期間は、作り直した時刻から取り直す**（それより前の dry run の回は `--since` で外す）
 - 1 回目の定期実行（10:18）は、`fly-hs1` が APPROACH（買いを組み立てた）、`fly` が NONE（右 − 左 +20 Hz だが関門 0 回）。
   1 腕あたり観測込みで 8 秒前後
 - ランダム対照群は、ハエ版の頻度が出てから足す（上の 5）
