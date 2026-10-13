@@ -94,3 +94,28 @@ class ConditionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompareToNullTest(unittest.TestCase):
+    def report(self, conditions):
+        def obs(dirs, gate=1, axis=4.0):
+            return [{"direction": d, "gate_spikes": gate, "axis_hz": axis, "MBON07_hz": 1.0, "MBON11_hz": 2.0,
+                     "wall_sec": 0.1 * i} for i, d in enumerate(["NONE", "NONE"] + dirs)]
+        return {"conditions": {k: {"observations": obs(*v)} for k, v in conditions.items()}}
+
+    def test_flags_only_what_leaves_the_null_span(self):
+        base = ["APPROACH", "NONE", "APPROACH", "NONE"]
+        a = self.report({"base": (base,), "tiny": (["NONE", "NONE", "APPROACH", "NONE"],)})
+        b = self.report({"base": (base,), "zero": (["APPROACH"] * 4,), "same": (base,)})
+        result = plasticity.compare_to_null([a, b])
+        self.assertEqual(result["null"], ["base", "tiny"])
+        self.assertEqual(result["null_span"]["APPROACH"], (1, 2))
+        self.assertIn("APPROACH", result["outside"]["zero"])
+        self.assertEqual(result["outside"]["same"], [])
+        self.assertEqual(result["conditions"]["same"]["same_as_base_pct"], 100)
+
+    def test_bases_must_agree(self):
+        a = self.report({"base": (["APPROACH"] * 4,)})
+        b = self.report({"base": (["NONE"] * 4,)})
+        with self.assertRaises(SystemExit):
+            plasticity.compare_to_null([a, b])

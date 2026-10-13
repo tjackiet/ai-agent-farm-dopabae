@@ -171,6 +171,50 @@ def summarize(report: dict) -> None:
     print("距離（段）:", report["hops"])
 
 
+NULL_PREFIX = "tiny"
+JUDGED = ("APPROACH", "AVOID", "NONE", "gate_open_pct", "axis_mean_hz")
+
+
+def condition_stats(observations: list[dict], base: list[dict]) -> dict:
+    """ならしを除いた観測の数字。基準と同じ方向だった割合も出す。"""
+    counts = Counter(o["direction"] for o in observations)
+    n = len(observations)
+    return {
+        "APPROACH": counts.get("APPROACH", 0),
+        "AVOID": counts.get("AVOID", 0),
+        "NONE": counts.get("NONE", 0),
+        "gate_open_pct": round(100 * sum((o["gate_spikes"] or 0) >= 1 for o in observations) / n),
+        "axis_mean_hz": round(statistics.fmean(o["axis_hz"] for o in observations), 2),
+        "same_as_base_pct": round(100 * sum(a["direction"] == b["direction"] for a, b in zip(observations, base)) / n),
+        "MBON07_hz": round(statistics.fmean(o["MBON07_hz"] for o in observations), 1),
+        "MBON11_hz": round(statistics.fmean(o["MBON11_hz"] for o in observations), 1),
+    }
+
+
+def compare_to_null(reports: list[dict]) -> dict:
+    """複数の結果をまとめ、揺らぎの目安（基準と tiny*）の幅の外に出た数字を挙げる。
+
+    基準は結果どうしで同じでなければならない（乱数を使わないので、計算時間を除けば一致する）。
+    幅は最小〜最大で、標本は少ない。外に出たかどうかは目安である。
+    """
+    strip = lambda obs: [{k: v for k, v in o.items() if k != "wall_sec"} for o in obs]  # noqa: E731
+    bases = [strip(r["conditions"]["base"]["observations"]) for r in reports if "base" in r["conditions"]]
+    if not bases or any(b != bases[0] for b in bases):
+        raise SystemExit("基準（base）が無いか、結果どうしで一致しません")
+    base = bases[0][probe.WARMUP:]
+    merged = {}
+    for report in reports:
+        for name, cond in report["conditions"].items():
+            merged.setdefault(name, condition_stats(cond["observations"][probe.WARMUP:], base))
+    nulls = [k for k in merged if k == "base" or k.startswith(NULL_PREFIX)]
+    span = {x: (min(merged[k][x] for k in nulls), max(merged[k][x] for k in nulls)) for x in JUDGED}
+    tiny_same = [merged[k]["same_as_base_pct"] for k in nulls if k != "base"]
+    outside = {k: [x for x in JUDGED if not span[x][0] <= v[x] <= span[x][1]]
+               for k, v in merged.items() if k not in nulls}
+    return {"conditions": merged, "null": nulls, "null_span": span,
+            "null_same_as_base_pct": (min(tiny_same), max(tiny_same)) if tiny_same else None, "outside": outside}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=None, help="使う設定（腕）。既定は agent.yaml")
@@ -180,8 +224,16 @@ def main(argv=None) -> int:
     parser.add_argument("--summarize", nargs="+", type=Path, default=None, help="結果の JSON を読んで比べるだけ")
     args = parser.parse_args(argv)
     if args.summarize:
-        for path in args.summarize:
-            summarize(json.loads(path.read_text(encoding="utf-8")))
+        reports = [json.loads(path.read_text(encoding="utf-8")) for path in args.summarize]
+        for report in reports:
+            summarize(report)
+        if len(reports) > 1:
+            result = compare_to_null(reports)
+            print("\n揺らぎの目安:", ", ".join(result["null"]), "の幅（最小〜最大）:", result["null_span"],
+                  "／基準と同じ方向（tiny*）:", result["null_same_as_base_pct"])
+            for name, keys in result["outside"].items():
+                stats = result["conditions"][name]
+                print(f"  {name}: 幅の外 {keys or 'なし'}／基準と同じ方向 {stats['same_as_base_pct']}%")
         return 0
     names = [n.strip() for n in args.conditions.split(",") if n.strip()]
     unknown = [n for n in names if n not in CONDITIONS]
