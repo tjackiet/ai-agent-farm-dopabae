@@ -238,6 +238,19 @@ macOS は `scripts/launchd/local.dopabae.plist` の `__REPO__` と `__PATH__` �
 `~/Library/LaunchAgents` へ置きます。Linux は `scripts/systemd/README.md` に cron と
 systemd の例があります。
 
+```bash
+# PATH には bitbank・node・claude の置き場所を入れる。fnm を使っているなら、
+# which が返す fnm_multishells は使い捨てなので、realpath で実体を求める。
+NODE_BIN="$(realpath "$(dirname "$(which node)")")"
+LAUNCH_PATH="$NODE_BIN:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+sed -e "s|__REPO__|$(pwd)|g" -e "s|__PATH__|$LAUNCH_PATH|g" \
+  scripts/launchd/local.dopabae.plist > ~/Library/LaunchAgents/local.dopabae.plist
+plutil -lint ~/Library/LaunchAgents/local.dopabae.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.dopabae.plist   # 止めるのは bootout
+```
+
+新しく作った腕は、定期実行に任せる前に `bitbank paper init` で口座を作ります（作り忘れると、その腕は毎回 HOLD になります）。
+
 **二重起動は防がれています。** 前の回がまだ走っている腕は、その回を飛ばします
 （`skipped` として要約に出ます）。実行しないことによる機会損失は許容し、二重発注は許容しません。
 
