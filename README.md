@@ -179,7 +179,7 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 
 ### 配線図を用意する
 
-ハエ版（Phase 3）が使う配線図は MaleCNS v1.0 です。データはリポジトリに含めず、
+ハエ版（`dopabae/fly.py`）が使う配線図は MaleCNS v1.0 です。データはリポジトリに含めず、
 `agent.yaml` の `fly.connectome` に取得元と SHA-256 だけを置いています。
 
 ```bash
@@ -214,11 +214,17 @@ BITBANK_PAPER_STATE_PATH=var/paper-state.json bitbank paper init --jpy=1000000
 ```bash
 python3 scripts/make_arm.py cage-only --source always_approach
 python3 scripts/make_arm.py fly       --source fly
-python3 -m dopabae.evaluate --config arms/fly.yaml --config arms/cage-only.yaml
+python3 scripts/make_arm.py fly-hs1   --source fly --half-saturation 1.0
+python3 -m dopabae.evaluate --config arms/fly.yaml --config arms/cage-only.yaml --since 2026-10-20T00:00:00+09:00
 ```
 
 出るのは方向の頻度と偏り、檻の扱いの内訳、方向のあとの値動き（並べ替え検定つき）、成績です。
 **結論は出しません。** 標本が少ないうちは、その旨を添えて数字だけを返します。
+`--since` / `--until` で、全部の腕がそろって回っていた期間だけに区切れます。
+
+ハエ版の読み出しは Stonkfly と同じです（右 DNp20 − 左 DNp20 が ±2 Hz 以上、DNpe017 が 1 回以上発火したとき）。
+**左右 DNp20 の差は回転の癖で、画像によらずプラスに偏ります。** 市場の洞察とは読みません。
+Phase 4 の始めかたは `docs/IMPLEMENTATION_PLAN.md` の Phase 4「始めかた」にあります。
 
 ### 定期運用する
 

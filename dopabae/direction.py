@@ -3,14 +3,14 @@
 方向は APPROACH / AVOID / NONE の三値。出どころは `agent.yaml` の `direction.source`
 で切り替える。どの出どころも同じ契約を満たす。
 
-- 入力：観測（この段階では使わない。ハエ版は画像を受け取る）
-- 出力：方向と根拠。失敗したら方向 None と失敗理由
+- 入力：観測。対照群は使わない。ハエ版（fly）は画像の枚だけを受け取る（残高・損益・保有量は渡さない）
+- 出力：方向と根拠。失敗したら方向 None と失敗理由。ハエ版は観測した発火の値も返す
 
 方向を得られなかったときの扱いは `direction.on_failure`（hold のみ）。
 檻はこの結果をそのまま受け取り、方向がなければ何もしない。
 
 always_approach と random は評価用の対照群（docs/DESIGN_MEMO.md 4 章）。
-ハエ版（fly）は Phase 3 で足す。
+ハエ版（fly）は `dopabae/fly.py`。
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ class Direction:
     reason: str = ""
     error: str | None = None
     seed: int | None = None  # source=random のとき、この回に使った種
+    observation: dict | None = None  # source=fly のとき、観測した発火の値（解釈は入れない）
 
     @property
     def ok(self) -> bool:
@@ -47,6 +48,7 @@ class Direction:
             "reason": self.reason,
             "error": self.error,
             "seed": self.seed,
+            "observation": self.observation,
         }
 
 
@@ -86,8 +88,12 @@ def random_direction(
     return Direction(source="random", value=value, reason=reason, seed=actual)
 
 
-def resolve(config: Config, run_key: str) -> Direction:
-    """設定に従って方向を得る。出どころの例外はすべて失敗として返す。"""
+def resolve(config: Config, run_key: str, frames=None) -> Direction:
+    """設定に従って方向を得る。出どころの例外はすべて失敗として返す。
+
+    `frames` はハエに見せる画像の枚（`vision.render_frames`）。描けなかった回は None で、
+    ハエ版は失敗（HOLD）になる。対照群は画像を見ない。
+    """
     source = config.direction_source
     try:
         if source == "always_approach":
@@ -97,7 +103,9 @@ def resolve(config: Config, run_key: str) -> Direction:
                 config.direction_random_seed, run_key, config.direction_random_weights
             )
         if source == "fly":
-            return failed(source, "ハエ版はまだ実装されていない（Phase 3）")
+            from . import fly  # numpy・配線図が要るので、使うときだけ読む
+
+            return fly.decide(config, frames)
     except Exception as exc:  # noqa: BLE001 - 出どころの失敗で落とさず、檻に HOLD させる
         return failed(source, f"{type(exc).__name__}: {exc}")
     return failed(source, f"扱えない出どころです: {source}")

@@ -272,9 +272,31 @@ class Arm:
         }
 
 
-def load_arm(config, root: Path | None = None, label: str | None = None) -> Arm:
-    """1つの設定（＝1つの腕）の判断ログを読む。"""
-    records = performance_module.all_records(config, root)
+def within(records: Sequence[dict], tz_name: str, since: str | None, until: str | None) -> list[dict]:
+    """観測時刻（run_id）が [since, until] に入る回だけを残す。読めない run_id の回は落とす。
+
+    対照群をあとから足した腕は、全部の腕がそろって回っていた期間で比べる（同じ期間の相場）。
+    """
+    if since is None and until is None:
+        return list(records)
+    lo = timeutil.from_iso(since, tz_name) if since else None
+    hi = timeutil.from_iso(until, tz_name) if until else None
+    kept = []
+    for record in records:
+        try:
+            at = timeutil.from_iso(record.get("run_id", ""), tz_name)
+        except (TypeError, ValueError):
+            continue
+        if (lo is None or at >= lo) and (hi is None or at <= hi):
+            kept.append(record)
+    return kept
+
+
+def load_arm(
+    config, root: Path | None = None, label: str | None = None, since: str | None = None, until: str | None = None
+) -> Arm:
+    """1つの設定（＝1つの腕）の判断ログを読む。`since` / `until` で期間を区切れる（ISO 8601）。"""
+    records = within(performance_module.all_records(config, root), config.timezone, since, until)
     fingerprints = sorted(
         {
             fp
@@ -308,8 +330,10 @@ def overlap(arms: Sequence[Arm]) -> tuple[str | None, str | None]:
     return timeutil.to_iso(latest_start), timeutil.to_iso(earliest_end)
 
 
-def compare(arms: Sequence[Arm], horizon_minutes: int, tolerance_minutes: int) -> dict:
-    """腕を並べて比べる。結論は書かない。読んだ人間が判断する。"""
+def compare(
+    arms: Sequence[Arm], horizon_minutes: int, tolerance_minutes: int, window: dict | None = None
+) -> dict:
+    """腕を並べて比べる。結論は書かない。読んだ人間が判断する。`window` は区切った期間（記録用）。"""
     reports = [arm.report(horizon_minutes, tolerance_minutes) for arm in arms]
     start, end = overlap(arms)
     notes: list[str] = []
@@ -333,6 +357,7 @@ def compare(arms: Sequence[Arm], horizon_minutes: int, tolerance_minutes: int) -
             notes.append(f"{report['label']}: {report['forward_returns']['sample_warning']}")
     return {
         "schema_version": 1,
+        "window": window,
         "horizon_minutes": horizon_minutes,
         "tolerance_minutes": tolerance_minutes,
         "overlap": {"from": start, "to": end},
@@ -355,19 +380,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--horizon-minutes", type=int, default=60, help="方向のあと何分の値動きを見るか")
     parser.add_argument("--tolerance-minutes", type=int, default=8, help="観測時刻のずれの許容（既定は15分足の半分）")
     parser.add_argument("--out", default=None, help="JSON の書き出し先。省略すると標準出力だけ")
+    parser.add_argument("--since", default=None, metavar="ISO8601",
+                        help="この時刻以降の回だけで比べる（例: 2026-10-20T00:00:00+09:00）。"
+                             "対照群をあとから足したときは、全部の腕がそろった時刻を入れる")
+    parser.add_argument("--until", default=None, metavar="ISO8601", help="この時刻までの回だけで比べる")
     args = parser.parse_args(argv)
 
     paths = args.config or [None]
     try:
         arms = [
-            load_arm(config_module.load(path), label=Path(path).stem if path else None)
+            load_arm(config_module.load(path), label=Path(path).stem if path else None,
+                     since=args.since, until=args.until)
             for path in paths
         ]
-    except config_module.ConfigError as exc:
+    except (config_module.ConfigError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         return 1
 
-    report = compare(arms, args.horizon_minutes, args.tolerance_minutes)
+    report = compare(arms, args.horizon_minutes, args.tolerance_minutes, {"since": args.since, "until": args.until})
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         target = Path(args.out)

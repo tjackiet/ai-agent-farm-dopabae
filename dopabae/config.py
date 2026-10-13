@@ -82,7 +82,7 @@ def fingerprint(raw: Any) -> str:
     return hashlib.sha256(packed.encode("utf-8")).hexdigest()[:8]
 
 
-# 方向の出どころ。fly は Phase 3 で追加する。
+# 方向の出どころ。fly はハエ版（dopabae/fly.py）。
 DIRECTION_SOURCES = ("always_approach", "random", "fly")
 # 方向を得られなかったときの扱い。hold しか認めない（CLAUDE.md「判断できないときは HOLD」）。
 ON_FAILURE_CHOICES = ("hold",)
@@ -244,6 +244,14 @@ class Config:
     vision_text_rows_px: int
     vision_motion: str
     vision_motion_frames: int
+    # 読み出し（fly.readout）。null は未決。source=fly のときは全部そろっていなければならない。
+    readout_approach: tuple[str, ...] | None
+    readout_avoid: tuple[str, ...] | None
+    readout_approach_threshold_hz: float | None
+    readout_avoid_threshold_hz: float | None
+    readout_gate: tuple[str, ...] | None
+    readout_gate_min_spikes: int
+    readout_record: tuple[str, ...] | None
     vision_path: str
 
     # 配線図（fly.connectome）。データはリポジトリに含めず、取得元と指紋だけを持つ。
@@ -279,6 +287,8 @@ R8_SUBTYPE_CHANNELS = {"R8p": "blue", "R8y": "green"}
 RETINA_LAYOUTS = ("split_eyes", "shared")
 # 1 観測のあいだに見せる動き。none は静止画（Stonkfly と同じ）。
 VISION_MOTIONS = ("none", "grow_last")
+# 読み出しの細胞群の左右（型名:L / 型名:R）。
+READOUT_SIDES = ("L", "R")
 RETINA_SAMPLINGS = ("point", "area")
 # 網に入れる細胞の選びかた。いまは Stonkfly と同じものだけ。
 NEURON_POLICIES = ("assigned_superclass",)
@@ -286,6 +296,46 @@ REFRACTORY_INPUTS = ("drop", "keep")
 
 # 配線図から読むファイル。どれも欠けてはならない。
 CONNECTOME_FILE_KEYS = ("annotations", "weights", "neurotransmitters")
+
+
+def _selectors(raw: Any, path: str) -> tuple[str, ...] | None:
+    """読み出しの細胞群。null か、「型名」「型名:L」「型名:R」の並び。"""
+    value = _get(raw, path)
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) and v.strip() for v in value):
+        raise ConfigError(f"agent.yaml の {path} は null か、型名の並びです: {value!r}")
+    for item in value:
+        name, sep, side = item.partition(":")
+        if not name.strip() or (sep and side not in READOUT_SIDES):
+            raise ConfigError(f"agent.yaml の {path} は「型名」か「型名:L / 型名:R」です: {item!r}")
+    return tuple(value)
+
+
+def _readout(raw: Any) -> dict:
+    """fly.readout。値はハエが書き換えない（CLAUDE.md）。"""
+    base = "fly.readout"
+
+    def optional_num(key: str) -> float | None:
+        return None if _get(raw, f"{base}.{key}") is None else _num(raw, f"{base}.{key}")
+
+    out = {
+        "approach": _selectors(raw, f"{base}.approach_neurons"),
+        "avoid": _selectors(raw, f"{base}.avoid_neurons"),
+        "approach_threshold_hz": optional_num("approach_threshold_hz"),
+        "avoid_threshold_hz": optional_num("avoid_threshold_hz"),
+        "gate": _selectors(raw, f"{base}.gate_neurons"),
+        "gate_min_spikes": _int(raw, f"{base}.gate_min_spikes"),
+        "record": _selectors(raw, f"{base}.record_neurons"),
+    }
+    up, down = out["approach_threshold_hz"], out["avoid_threshold_hz"]
+    if up is not None and up <= 0:
+        raise ConfigError(f"agent.yaml の {base}.approach_threshold_hz は正の値です")
+    if down is not None and down >= 0:
+        raise ConfigError(f"agent.yaml の {base}.avoid_threshold_hz は負の値です")
+    if out["gate_min_spikes"] < 1:
+        raise ConfigError(f"agent.yaml の {base}.gate_min_spikes は 1 以上です")
+    return out
 
 
 def _connectome_files(raw: Any) -> dict[str, ConnectomeFile]:
@@ -524,6 +574,13 @@ def load(path: Path | str | None = None) -> Config:
             f"photoreceptor_input.chunk_ms の倍数になる枚数です（いま 1 枚 {frame_ms:g} ms）"
         )
 
+    readout = _readout(raw)
+    direction_source = _choice(raw, "direction.source", DIRECTION_SOURCES)
+    if direction_source == "fly":
+        missing = [k for k in ("approach", "avoid", "approach_threshold_hz", "avoid_threshold_hz") if readout[k] is None]
+        if missing:
+            raise ConfigError(f"direction.source が fly のとき、fly.readout の {missing} が要ります（人間が決める）")
+
     halt = _num(raw, "risk.drawdown.halt_new_buys_pct")
     forced = _num(raw, "risk.drawdown.forced_exit_pct")
     if forced >= halt:
@@ -563,7 +620,7 @@ def load(path: Path | str | None = None) -> Config:
         skip_on_circuit_break=_bool(raw, "risk.guards.skip_on_circuit_break"),
         skip_on_exchange_maintenance=_bool(raw, "risk.guards.skip_on_exchange_maintenance"),
         max_data_age_sec=_int(raw, "risk.guards.max_data_age_sec"),
-        direction_source=_choice(raw, "direction.source", DIRECTION_SOURCES),
+        direction_source=direction_source,
         direction_on_failure=_choice(raw, "direction.on_failure", ON_FAILURE_CHOICES),
         direction_random_seed=seed_raw,
         direction_random_weights=weights,
@@ -594,6 +651,13 @@ def load(path: Path | str | None = None) -> Config:
         vision_text_rows_px=_int(raw, "fly.vision.text_rows_px"),
         vision_motion=motion,
         vision_motion_frames=motion_frames,
+        readout_approach=readout["approach"],
+        readout_avoid=readout["avoid"],
+        readout_approach_threshold_hz=readout["approach_threshold_hz"],
+        readout_avoid_threshold_hz=readout["avoid_threshold_hz"],
+        readout_gate=readout["gate"],
+        readout_gate_min_spikes=readout["gate_min_spikes"],
+        readout_record=readout["record"],
         vision_path=_str(raw, "memory.vision.path"),
         connectome_source=_str(raw, "fly.connectome.source"),
         connectome_download_base=_download_base(raw),

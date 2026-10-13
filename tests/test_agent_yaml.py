@@ -97,7 +97,7 @@ class AgentYamlTest(unittest.TestCase):
         # 読み出しの閾値・対象ニューロンはここに置く（ハエが書き換えない）。未決なら null。
         readout = self.cfg["fly"]["readout"]
         for key in ("approach_neurons", "avoid_neurons",
-                    "approach_threshold_hz", "avoid_threshold_hz"):
+                    "approach_threshold_hz", "avoid_threshold_hz", "gate_neurons", "gate_min_spikes"):
             self.assertIn(key, readout)
 
     def test_cage_is_within_capital(self):

@@ -92,10 +92,10 @@ def _see(
     now: datetime,
     run_id: str,
     repo_root: Path | None,
-) -> vision_module.Image | None:
-    """ハエに見せる画像を描いて残す。
+) -> tuple[vision_module.Image, ...] | None:
+    """ハエに見せる画像の枚を描き、最後の枚を残す（静止画なら 1 枚。`fly.vision.motion`）。
 
-    描けなかった回は None を返し、警告に残す。方向の出どころがハエ（Phase 3）なら
+    描けなかった回は None を返し、警告に残す。方向の出どころがハエなら
     画像の欠損は方向の失敗として HOLD になるが、対照群（always_approach / random）は
     画像を見ないので判断は続ける。
     """
@@ -104,7 +104,8 @@ def _see(
         candles = vision_module.select_recent(
             vision_module.parse_candles(rows), cfg.vision_lookback_candles, int(now.timestamp() * 1000)
         )
-        image = vision_module.render(cfg, candles, market.bid, market.ask, cfg.pair)
+        frames = vision_module.render_frames(cfg, candles, market.bid, market.ask, cfg.pair)
+        image = frames[-1]
     except (cli.CliError, vision_module.VisionError, ValueError, KeyError, TypeError) as exc:
         client.warnings.append(f"画像を描けませんでした: {exc}")
         return None
@@ -115,7 +116,7 @@ def _see(
         target.write_bytes(vision_module.to_png(image))
     except OSError as exc:
         client.warnings.append(f"画像を保存できませんでした: {exc}")
-    return image
+    return frames
 
 
 def _narrate(
@@ -163,11 +164,13 @@ def run_once(
     error: str | None = None
     stopped_hours: float | None = None
     image: vision_module.Image | None = None
+    frames: tuple[vision_module.Image, ...] | None = None
     try:
         guards = observe.check_guards(client, cfg)
         market = observe.observe_market(client, cfg, now)
         spec = observe.observe_pair_spec(client, cfg)
-        image = _see(cfg, client, market, now, run_id, repo_root)
+        frames = _see(cfg, client, market, now, run_id, repo_root)
+        image = frames[-1] if frames else None
         # ペーパー口座に触る前に測る。tick も lazy tick も lastTickAt を進めるため。
         stopped_hours = state_module.stopped_hours(cfg, now, repo_root)
         derived, trades = _observe_account(client, cfg, now, market.last, spec)
@@ -195,10 +198,20 @@ def run_once(
                 cage=cage.GUARD,
             )
         else:
-            resolved = (resolver or direction_module.resolve)(cfg, run_id)
+            resolved = (resolver or direction_module.resolve)(cfg, run_id, frames)
             if resolved.error is not None:
                 client.warnings.append(f"方向を得られませんでした: {resolved.error}")
-            decision = cage.decide(cfg, guards, market, spec, derived, resolved, now, stopped_hours)
+            elapsed = time.monotonic() - started
+            if elapsed > cfg.max_runtime_sec:
+                # ハエのシミュレーションで時間がかかると、観測した気配が古くなる。古い気配では発注しない。
+                decision = cage.Decision(
+                    action=cage.HOLD,
+                    state=cage.state_name(cfg, derived),
+                    reason=f"方向を得るまでに {int(elapsed)} 秒かかり、実行時間の上限を超えた",
+                    cage=cage.GUARD,
+                )
+            else:
+                decision = cage.decide(cfg, guards, market, spec, derived, resolved, now, stopped_hours)
 
     order_records: list[dict[str, Any]] = []
     if error is None and (decision.cancel or decision.place):

@@ -147,6 +147,26 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(report["arms"][0]["cage"], {"bought": 1, "wall": 2})
 
 
+class WindowTest(unittest.TestCase):
+    def test_since_and_until_keep_only_the_window(self):
+        records = [record(0, APPROACH), record(15, AVOID), record(30, NONE), record(45, APPROACH)]
+        kept = evaluate.within(records, "Asia/Tokyo", "2026-09-15T09:15:00+09:00", "2026-09-15T09:30:00+09:00")
+        self.assertEqual([r["run_id"] for r in kept], [records[1]["run_id"], records[2]["run_id"]])
+        self.assertEqual(evaluate.within(records, "Asia/Tokyo", None, None), records)
+
+    def test_unreadable_run_id_is_dropped_only_when_filtering(self):
+        records = [record(0, APPROACH), {**record(15, AVOID), "run_id": "?"}]
+        self.assertEqual(len(evaluate.within(records, "Asia/Tokyo", "2026-09-15T00:00:00+09:00", None)), 1)
+
+    def test_bad_since_is_an_error_not_a_crash(self):
+        proc = subprocess.run(
+            [sys.executable, "-m", "dopabae.evaluate", "--since", "2026-10-20"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent.parent, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("error", json.loads(proc.stdout))
+
+
 class CliTest(unittest.TestCase):
     def test_runs_and_prints_json_without_touching_the_exchange(self):
         proc = subprocess.run(

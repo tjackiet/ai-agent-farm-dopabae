@@ -140,10 +140,10 @@ risk:
 # 方向の出どころ（docs/IMPLEMENTATION_PLAN.md Phase 1）。
 #
 # 方向は APPROACH / AVOID / NONE の三値。出どころは source で切り替える。
-# ハエ版（fly）は Phase 3 で追加する。always_approach と random は評価用の対照群。
+# ハエ版（fly）は dopabae/fly.py（読み出しは fly.readout）。always_approach と random は評価用の対照群。
 # 返せなかった・読めなかったときは on_failure に従う（既定 hold）。
 direction:
-  source: always_approach # always_approach | random | fly（Phase 3 で追加）
+  source: always_approach # always_approach | random | fly。腕ごとに scripts/make_arm.py で切り替える
   on_failure: hold # hold のみ。シミュレーション失敗・入力欠損も hold
   random_seed: null # source=random のとき。null なら実行ごとに記録して固定する
   # source=random のときの三値の出しかた。null なら等確率。
@@ -317,13 +317,26 @@ fly:
     checkpoint_path: var/fly/state.npz
 
   readout:
-    # 接近の指標 − 回避の指標 の1本の軸。正の閾値超で APPROACH、負の閾値未満で AVOID、間は NONE。
+    # 接近の指標 − 回避の指標 の1本の軸。approach_threshold_hz 以上で APPROACH、
+    # avoid_threshold_hz 以下で AVOID、間は NONE。指標は群の平均発火率（Hz / 細胞）。
+    # gate_neurons が 1 観測のあいだに合わせて gate_min_spikes 回以上発火しなければ NONE。
     # 設計者が決めた読み替えであり、「売買を判断する細胞」ではない。
-    # 対象ニューロン群は未決（候補は docs/DESIGN_MEMO.md 3.3 節）。配線図の選定後に人間が決める。
-    approach_neurons: null # 接近・定位に関わる下行性ニューロン、接近側 MBON など
-    avoid_neurons: null # 逃避回路（LC4 / LPLC2 → DNp01）、回避側 MBON など
-    approach_threshold_hz: null # 未決。Phase 3 で決め、人間が確認する
-    avoid_threshold_hz: null # 未決。負の値
+    #
+    # 2026-10-12 に人間が Stonkfly と同じ読み出しに決めた（右 DNp20 − 左 DNp20、DNpe017 が条件。
+    # Stonkfly の stonkfly/neural/controller.py の Decoder。|差| が閾値以上で方向を出す）。
+    # 設計メモ 3.3 の「接近／回避の回路をその意味のまま使う」からは離れる。**左右 DNp20 の差は
+    # 回転の癖で、Phase 3 の測定では画像によらず 6〜9 割の観測で +2 Hz を超えた。** 市場の洞察とは読まない。
+    # 細胞群は「型名」か「型名:L / 型名:R」（左右は instance の末尾。Stonkfly の somaSide と一致を確かめた）。
+    approach_neurons: [DNp20:R]
+    avoid_neurons: [DNp20:L]
+    approach_threshold_hz: 2.0
+    avoid_threshold_hz: -2.0
+    gate_neurons: [DNpe017] # null なら関門なし
+    gate_min_spikes: 1
+    # 判断には使わず、発火率を判断ログに残すだけの細胞群。lLN1_bc は嗅覚の回路の点火の目安
+    # （Phase 3「分かったこと」）。点火の前は DNpe017 がよく発火し、点火のあとはほとんど発火しない
+    # （0.02）ので、関門の開き具合が点火で変わる。評価では点火の前後を分けて見る。
+    record_neurons: [lLN1_bc]
 
   reward:
     enabled: false # Phase 5 まで無効。学習なしで動かす
