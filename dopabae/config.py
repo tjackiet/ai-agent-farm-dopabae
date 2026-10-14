@@ -195,6 +195,25 @@ class RewardSettings:
 
 
 @dataclass(frozen=True)
+class MbonTerm:
+    """読み出しの差に足す MBON の項（fly.readout.mbon。2026-10-14 に人間が B2・w = 0.5 に決めた）。
+
+    項 = w × 基準（足す側）×［足す側 ÷ 基準 − 引く側 ÷ 基準］。どちらも基準どおりなら 0。
+    基準は腕ごとに、重みを変えない網の実測から人間が決める。値はハエが書き換えない。
+    """
+
+    approach: str  # 発火が基準より上がると、差を＋（近づく）へ動かす型
+    avoid: str  # 発火が基準より上がると、差を−（逃げる）へ動かす型
+    weight: float
+    approach_baseline_hz: float
+    avoid_baseline_hz: float
+
+    def term_hz(self, approach_hz: float, avoid_hz: float) -> float:
+        ratio = approach_hz / self.approach_baseline_hz - avoid_hz / self.avoid_baseline_hz
+        return self.weight * self.approach_baseline_hz * ratio
+
+
+@dataclass(frozen=True)
 class Config:
     """agent.yaml の内容。すべて読み取り専用。"""
 
@@ -284,6 +303,7 @@ class Config:
     readout_gate: tuple[str, ...] | None
     readout_gate_min_spikes: int
     readout_record: tuple[str, ...] | None
+    readout_mbon: MbonTerm | None  # null は MBON を足さない（enabled: false か、書いていない古い腕）
     vision_path: str
 
     # 配線図（fly.connectome）。データはリポジトリに含めず、取得元と指紋だけを持つ。
@@ -369,7 +389,51 @@ def _readout(raw: Any) -> dict:
         raise ConfigError(f"agent.yaml の {base}.avoid_threshold_hz は負の値です")
     if out["gate_min_spikes"] < 1:
         raise ConfigError(f"agent.yaml の {base}.gate_min_spikes は 1 以上です")
+    out["mbon"] = _mbon_term(raw)
     return out
+
+
+def _mbon_term(raw: Any) -> MbonTerm | None:
+    """fly.readout.mbon。書いていなければ足さない（2026-10-14 より前に作った腕）。
+
+    基準（Hz）は null なら未決。enabled を true にするには、両方の基準が要る（比をとるので 0 も不可）。
+    """
+    base = "fly.readout.mbon"
+    readout = _get(raw, "fly.readout")
+    if not isinstance(readout, dict) or "mbon" not in readout:
+        return None
+    enabled = _bool(raw, f"{base}.enabled")
+    names = {}
+    for key in ("approach", "avoid"):
+        name = _str(raw, f"{base}.{key}")
+        if not name.strip() or ":" in name:
+            raise ConfigError(f"agent.yaml の {base}.{key} は型名です: {name!r}")
+        names[key] = name
+    if names["approach"] == names["avoid"]:
+        raise ConfigError(f"agent.yaml の {base}.approach と avoid は別の型です")
+    weight = _num(raw, f"{base}.weight")
+    if weight <= 0:
+        raise ConfigError(f"agent.yaml の {base}.weight は正の値です")
+    baselines = {}
+    for key in ("approach_baseline_hz", "avoid_baseline_hz"):
+        if _get(raw, f"{base}.{key}") is None:
+            baselines[key] = None
+            continue
+        baselines[key] = _num(raw, f"{base}.{key}")
+        if baselines[key] <= 0:
+            raise ConfigError(f"agent.yaml の {base}.{key} は正の値か null です（比をとるので 0 は使えない）")
+    if not enabled:
+        return None
+    missing = [k for k, v in baselines.items() if v is None]
+    if missing:
+        raise ConfigError(f"fly.readout.mbon.enabled が true のとき、{missing} が要ります（腕ごとに実測して人間が決める）")
+    return MbonTerm(
+        approach=names["approach"],
+        avoid=names["avoid"],
+        weight=weight,
+        approach_baseline_hz=baselines["approach_baseline_hz"],
+        avoid_baseline_hz=baselines["avoid_baseline_hz"],
+    )
 
 
 # 報酬・嫌悪を出すきっかけ。決済が確定した回だけ（CLAUDE.md）。
@@ -794,6 +858,7 @@ def load(path: Path | str | None = None) -> Config:
         readout_gate=readout["gate"],
         readout_gate_min_spikes=readout["gate_min_spikes"],
         readout_record=readout["record"],
+        readout_mbon=readout["mbon"],
         vision_path=_str(raw, "memory.vision.path"),
         connectome_source=_str(raw, "fly.connectome.source"),
         connectome_download_base=_download_base(raw),

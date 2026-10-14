@@ -84,6 +84,58 @@ def learning_network(column_map: retina.ColumnMap) -> "connectome.Network":
 
 
 @unittest.skipIf(np is None, "numpy が無い")
+class MbonTermTest(unittest.TestCase):
+    """読み出しの差に足す MBON の項（B2。2026-10-14 に人間が決めた）。"""
+
+    def setUp(self):
+        from dopabae.config import MbonTerm
+
+        self.dir = TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.map = retina.load_column_map(write_map(Path(self.dir.name), lattice(1)))
+        self.net = learning_network(self.map)
+        base = dataclasses.replace(helpers.load_config(), direction_source="fly")
+        self.off = base
+        # 0.5 秒で MBON11 が 9 回なら 18 Hz、MBON07 が 1 回なら 2 Hz（どちらも基準どおり）
+        self.on = dataclasses.replace(base, readout_mbon=MbonTerm("MBON11", "MBON07", 0.5, 18.0, 2.0))
+
+    def counts(self, left: int, right: int, gate: int, m07: int, m11: int):
+        c = np.zeros(self.net.n_neurons, dtype=np.int32)
+        c[self.net.index_of(np.array([DNP20_L, DNP20_R, DNPE017, MBON07, MBON11]))] = [left, right, gate, m07, m11]
+        return c
+
+    def test_at_the_baselines_the_answer_does_not_change(self):
+        for left, right in ((0, 0), (0, 1), (1, 0), (2, 2)):
+            on = fly.read(self.on, self.net, self.counts(left, right, 1, 1, 9), 0.5)
+            off = fly.read(self.off, self.net, self.counts(left, right, 1, 1, 9), 0.5)
+            self.assertEqual(on["value"], off["value"], (left, right))
+            self.assertAlmostEqual(on["axis_hz"], off["axis_hz"])
+            self.assertAlmostEqual(on["mbon"]["term_hz"], 0.0)
+        self.assertIsNone(off["mbon"])
+
+    def test_mbon07_below_its_baseline_moves_toward_approach(self):
+        """報酬で KC→MBON07 が弱まった向き。MBON07 が 0 なら 項 = 0.5 × 18 ×（1 − 0）= +9 Hz。"""
+        out = fly.read(self.on, self.net, self.counts(0, 0, 1, 0, 9), 0.5)
+        self.assertAlmostEqual(out["mbon"]["term_hz"], 9.0)
+        self.assertAlmostEqual(out["axis_hz"], 9.0)
+        self.assertEqual(out["value"], direction.APPROACH)
+        self.assertEqual(out["mbon"]["hz"], {"MBON11": 18.0, "MBON07": 0.0})
+        self.assertEqual(out["mbon"]["baseline_hz"], {"MBON11": 18.0, "MBON07": 2.0})
+        self.assertEqual(out["cells"]["mbon"], {"MBON11": [MBON11], "MBON07": [MBON07]})
+
+    def test_mbon11_below_its_baseline_moves_toward_avoid(self):
+        """嫌悪で KC→MBON11 が弱まった向き。MBON11 が 0 なら 項 = 0.5 × 18 ×（0 − 1）= −9 Hz。"""
+        out = fly.read(self.on, self.net, self.counts(0, 1, 1, 1, 0), 0.5)
+        self.assertAlmostEqual(out["axis_hz"], 2.0 - 9.0)
+        self.assertEqual(out["value"], direction.AVOID)
+
+    def test_closed_gate_still_means_none(self):
+        out = fly.read(self.on, self.net, self.counts(0, 0, 0, 0, 9), 0.5)
+        self.assertEqual(out["value"], direction.NONE)
+        self.assertIn("関門", out["rule"])
+
+
+@unittest.skipIf(np is None, "numpy が無い")
 class ReadTest(unittest.TestCase):
     """Stonkfly の Decoder と同じ規則: |右 − 左| が閾値以上で方向、関門が 0 回なら NONE。"""
 
@@ -130,6 +182,14 @@ class ReadTest(unittest.TestCase):
         missing = fly.read(dataclasses.replace(self.cfg, readout_record=("lLN1_bc",)), self.net, self.counts(0, 1, 3), 0.5)
         self.assertEqual(missing["record_hz"], {"lLN1_bc": None})
         self.assertEqual(missing["value"], direction.APPROACH)
+
+    def test_mbon_term_needs_the_cells_in_the_network(self):
+        """MBON の項を入れた腕で MBON が網に無ければ、方向を返さない（呼び出し側が HOLD にする）。"""
+        from dopabae.config import MbonTerm
+
+        cfg = dataclasses.replace(self.cfg, readout_mbon=MbonTerm("MBON11", "MBON07", 0.5, 18.0, 2.0))
+        with self.assertRaises(fly.FlyError):
+            fly.read(cfg, self.net, self.counts(0, 1, 1), 0.5)
 
     def test_select_by_side(self):
         self.assertEqual(list(self.net.body_ids[fly.select(self.net, ["DNp20:L"])]), [DNP20_L])

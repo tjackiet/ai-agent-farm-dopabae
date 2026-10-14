@@ -338,7 +338,23 @@ fly:
     # 判断には使わず、発火率を判断ログに残すだけの細胞群。lLN1_bc は嗅覚の回路の点火の目安
     # （Phase 3「分かったこと」）。点火の前は DNpe017 がよく発火し、点火のあとはほとんど発火しない
     # （0.02）ので、関門の開き具合が点火で変わる。評価では点火の前後を分けて見る。
-    record_neurons: [lLN1_bc]
+    # MBON07・MBON11 は、下の mbon の基準を腕ごとに実測するため（2026-10-14 に人間が決めた。
+    # 10/16 に腕を作り直すときから記録する。答えは変わらない）。
+    record_neurons: [lLN1_bc, MBON07, MBON11]
+    # 差に足す MBON の項（Phase 5。docs/IMPLEMENTATION_PLAN.md「B の候補を試算した」）。
+    # 2026-10-14 に人間が B2（基準との比で足す）・w = 0.5 に決めた。
+    #   差 =（右 DNp20 − 左 DNp20）＋ w × 基準(approach) ×［approach ÷ 基準 − avoid ÷ 基準］
+    # 向きは測定で見た動きに合わせた。報酬で KC→MBON07 が弱まる → 差が＋へ、嫌悪で KC→MBON11 が
+    # 弱まる → 差が−へ。MBON07 の変化は基準の比（約 14〜15 倍）で拡大されて足される。
+    # 基準は腕ごとに、重みを変えない網の記録（record_neurons）から測って人間が決める。null は未決。
+    # 入れるのは学習の腕と、その重み固定の対になる腕（Phase 6）。scripts/make_arm.py --mbon-baseline で入れる。
+    mbon:
+      enabled: false
+      approach: MBON11
+      avoid: MBON07
+      weight: 0.5
+      approach_baseline_hz: null
+      avoid_baseline_hz: null
 
   # 学習（Phase 5。dopabae/plasticity.py・dopabae/reward.py）。
   # 決済が確定した回だけ、確定損益から報酬か嫌悪かを決め、ドーパミン細胞に一定電流を流す。

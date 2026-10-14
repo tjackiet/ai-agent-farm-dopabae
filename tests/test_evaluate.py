@@ -290,6 +290,48 @@ class MakeArmTest(unittest.TestCase):
                                   capture_output=True, text=True, check=False)
             self.assertEqual(proc.returncode, 2, extra)
 
+    def test_fly_arm_can_drop_the_gate(self):
+        """関門なしの腕（2026-10-14 に人間が決めた fly-hs1-nogate）。差だけで方向を出す。"""
+        make_arm, raw = self._make_arm()
+        arm = make_arm.build(raw, "fly-hs1-nogate", "fly", None, None, half_saturation=1.0, no_gate=True)
+        self.assertIsNone(arm["fly"]["readout"]["gate_neurons"])
+        self.assertEqual(raw["fly"]["readout"]["gate_neurons"], ["DNpe017"])
+        base = make_arm.build(raw, "fly-hs1-nogate", "fly", None, None, half_saturation=1.0)
+        base["fly"]["readout"]["gate_neurons"] = None
+        self.assertEqual(arm, base)
+        self.assertIsNone(self._load(arm).readout_gate)
+
+    def test_fly_arm_can_turn_on_the_mbon_term(self):
+        make_arm, raw = self._make_arm()
+        baselines = make_arm.parse_mbon_baselines(["MBON11=17.7", "MBON07=1.14"])
+        arm = make_arm.build(raw, "fly-b2", "fly", None, None, mbon_baselines=baselines)
+        cfg = self._load(arm)
+        self.assertEqual((cfg.readout_mbon.approach_baseline_hz, cfg.readout_mbon.avoid_baseline_hz), (17.7, 1.14))
+        self.assertEqual(cfg.readout_mbon.weight, 0.5)
+        self.assertFalse(raw["fly"]["readout"]["mbon"]["enabled"])
+        with self.assertRaises(ValueError):
+            make_arm.build(raw, "x", "fly", None, None, mbon_baselines={"MBON11": 17.7})
+        for bad in ("MBON11", "MBON11=0", "MBON11=x", "=1"):
+            with self.assertRaises(ValueError, msg=bad):
+                make_arm.parse_mbon_baselines([bad])
+        script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"
+        for extra in (["--source", "random", "--no-gate"],
+                      ["--source", "always_approach", "--mbon-baseline", "MBON11=17.7", "--mbon-baseline", "MBON07=1.1"],
+                      ["--source", "fly", "--mbon-baseline", "MBON11=17.7"]):
+            proc = subprocess.run([sys.executable, str(script), "x", *extra],
+                                  capture_output=True, text=True, check=False)
+            self.assertEqual(proc.returncode, 2, extra)
+
+    def _load(self, arm):
+        import yaml
+
+        from dopabae import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "arm.yaml"
+            path.write_text(yaml.safe_dump(arm, allow_unicode=True), encoding="utf-8")
+            return config.load(path)
+
     def test_half_saturation_is_only_for_fly_arms(self):
         """対照群は画像を見ないので、半飽和を変えても腕の差にならない。"""
         script = Path(__file__).resolve().parent.parent / "scripts" / "make_arm.py"

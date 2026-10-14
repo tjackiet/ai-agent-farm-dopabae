@@ -1157,11 +1157,62 @@ APPROACH と AVOID の件数がそろうまで日数がかかる。**評価で�
 `fly.reward` に必須の値が増えて、それまでの腕が読めなくなったため。作り直したあとも 3 本とも学習は無効・`dry_run: false` で、
 網の状態は引き継いだので、ハエの答えは変わらない。設定の指紋が変わったので、**評価で 1 本の腕の中を比べるときは、
 作り直した時刻（Mac の `var/phase4-rebuild.txt`）より後の回だけを使う。** ランダムの腕の頻度を合わせる計算は、
-答えの出しかたが変わっていないので、2026-10-13 12:09 からの回を使ってよい。ランダムの腕を足すとき、ほかの腕は作り直さなくてよい。
+答えの出しかたが変わっていないので、2026-10-13 12:09 からの回を使ってよい（`mixed_config` の注意が出るが、頻度には影響しない）。
+ランダムの腕を足す日に、ハエ版の腕も作り直す（下の「10/16 にすること」）。
 
 **fnm で node を入れている Mac の注意。** `which bitbank` が `~/.local/state/fnm_multishells/...` を返すときは、
 シェルごとの使い捨てディレクトリなので plist に書けない。`realpath "$(dirname "$(which node)")"` で実体
 （`~/.local/share/fnm/node-versions/v<版>/installation/bin`）を求めて PATH に書く。node の版を上げたら書き直す。
+
+#### 10/16 にすること（2026-10-14 に人間が決めた）
+
+ランダムの腕を足す日に、次の 3 つをまとめて行う。腕を作り直すのは 1 回で済ませ、比べる期間の区切りを 1 つにする。
+
+| すること | 理由 |
+| --- | --- |
+| ランダムの腕を 2 本足す（`random-fly`・`random-fly-hs1`） | 上の「始めかた」5。頻度はハエ版の腕の実績から写す |
+| 関門なしの腕 `fly-hs1-nogate` を足す（半飽和 1.0・DNpe017 の関門を外す） | 標準（0.02）の様子見はほぼ関門で起きていた（Phase 5「B の候補を試算した」1）。関門を外したときの答えを、実際の相場で見る。`fly-hs1` はそのまま残す |
+| ハエ版の腕で MBON07・MBON11 の発火を記録する（`record_neurons`） | 学習の腕で使う MBON の項（B2）の基準を、腕ごとに実際の記録から測るため。**答えは変わらない**（記録するだけ）。設定の指紋は変わる |
+
+```bash
+git pull
+
+# 1. ランダムの腕の頻度を出す（作り直す前に。答えの出しかたは 10/13 から変わっていない）
+.venv/bin/python -m dopabae.evaluate --config arms/fly.yaml --config arms/fly-hs1.yaml --since 2026-10-13T12:09
+#    出力の各腕の matched_random_weights を控える
+
+# 2. 今ある腕を同じ引数で作り直す（record_neurons に MBON07・MBON11 が入る。口座・判断ログ・網の状態はそのまま）
+.venv/bin/python scripts/make_arm.py cage-only --source always_approach
+.venv/bin/python scripts/make_arm.py fly       --source fly
+.venv/bin/python scripts/make_arm.py fly-hs1   --source fly --half-saturation 1.0
+
+# 3. 腕を足す
+.venv/bin/python scripts/make_arm.py random-fly     --source random --seed 20261016 --weights '<fly の値>'
+.venv/bin/python scripts/make_arm.py random-fly-hs1 --source random --seed 20261017 --weights '<fly-hs1 の値>'
+.venv/bin/python scripts/make_arm.py fly-hs1-nogate --source fly --half-saturation 1.0 --no-gate
+
+# 4. 足した腕の口座を作る（既にある腕には触らない。bitbank paper reset は使わない）
+for arm in random-fly random-fly-hs1 fly-hs1-nogate; do
+  BITBANK_PAPER_STATE_PATH=var/arms/$arm/paper-state.json bitbank paper init --jpy=1000000
+done
+
+# 5.（勧める）関門なしの腕の網の状態を fly-hs1 から写す
+mkdir -p var/arms/fly-hs1-nogate/fly
+cp var/arms/fly-hs1/fly/state.npz var/arms/fly-hs1-nogate/fly/state.npz
+
+# 6. 手で 1 回ずつ回して確かめ、比べ始める時刻を残す
+.venv/bin/python -m dopabae.run --config arms/fly-hs1-nogate.yaml
+.venv/bin/python -m dopabae.run --config arms/random-fly.yaml
+date '+%Y-%m-%dT%H:%M' > var/phase4-start-1016.txt
+```
+
+- 5 を勧める理由：網の状態は乱数の種まで同じなので、同じ状態から始めれば `fly-hs1` と `fly-hs1-nogate` の差は関門の有無だけになる。
+  写さなければ静止状態から始まり、匂いの回路が点火するまでの数観測は答えが違う。写すかは人間が決める
+- 6 で見ること：`fly-hs1-nogate` の判断ログの `direction.observation.gate_spikes` が `null`、
+  `record_hz` に `MBON07`・`MBON11` の値があり、`direction.error` が `null`
+- 関門なしの腕に合わせたランダムの腕は、`fly-hs1-nogate` の頻度が出てから（数日後）足す
+- 比べる期間は `var/phase4-start-1016.txt` の時刻から。ハエ版の腕の中で比べるときも、この時刻より後の回だけを使う
+- MBON の項（B2）の基準は、10/16 からの記録が数日たまってから腕ごとに測る（Phase 5）
 
 ### Phase 5：可塑性と報酬
 
@@ -1290,6 +1341,8 @@ KC→MBON07/11 を ×0.5 にしただけで、どちらも 0 Hz になった（2
 | `agent.yaml`・`config.py` | `fly.reward` の値と検証。人間が決めていない値（null）があるうちは、学習を入れられない |
 | `scripts/make_arm.py` | 学習の状態と台帳の置き場所を腕ごとに分ける |
 | `scripts/probe_learning.py` | 学習を入れた網に刺激を与え、重みと発火の動きを測る（`fly.decide` をそのまま通す） |
+| `dopabae/fly.py`（読み出し）・`config.py` | 2026-10-14 に追加。`fly.readout.mbon` を入れた腕だけ、差に MBON の項（B2）を足す。判断ログの `direction.observation.mbon` に、MBON07・MBON11 の発火率・基準・w・項を残す。入れていない腕は `null` で、答えは変わらない |
+| `scripts/make_arm.py` | 2026-10-14 に追加。`--no-gate`（関門を外す）と `--mbon-baseline 型=Hz`（MBON の項を入れ、基準を置く） |
 
 **測った（2026-10-13。Linux 4 コア）**
 
@@ -1360,7 +1413,7 @@ python3 scripts/probe_plasticity.py --config arms/fly.yaml --conditions base,m07
 | `rule.memory_decay_sec`（記憶が元へ戻る時定数） | **2026-10-14 に人間が「実時間で 1 週間」に決め、336 秒（神経時間）にした。** 15 分おき・1 観測 0.5 秒なので、神経時間 1 秒が実時間 30 分にあたる（1 週間 = 672 観測 × 0.5 秒）。時定数なので、1 週間で元からのずれが約 37% に、約 4.9 日で半分になる。記憶が戻るのも観測のあいだだけで、定期実行が止まっている間は進まない。観測の間隔を変えたら、実時間の長さも変わる |
 | `rule.learn_when`（いつ・どこを学ぶか） | **2026-10-14 に人間が決めた。はじめ `stimulus_only`（報酬・嫌悪を与えた観測だけ）、同日 `stimulated_compartment`（与えた観測だけ、刺激した区画だけ）に。** 毎回学ぶと、嫌悪の細胞（PPL101）の自発発火で決済と関係なく重みが動くため（上の測定 3）。刺激を与えた観測でも、PPL101 の自発発火でもう一方の区画が動いていた（測定 4）ので、報酬の観測では KC→MBON07 だけ、嫌悪の観測では KC→MBON11 だけを変える。Stonkfly（毎回すべての区画）からは離れる |
 | `rule.dan_baseline_hz` | **2026-10-14 に人間が「差し引く」と決めた。** 型ごとに書けるようにし、刺激の無い観測 60 回の実測から PAM11 は 0 Hz、PPL101 は 77 Hz（平均 76.7 Hz・66〜85 Hz）とした。上乗せされた分だけが合図になる。Stonkfly も差し引く（値は未確認）。数値 1 つで書いた古い腕は、両方に同じ値を使って読む |
-| 読み出しへの MBON の加えかた（B） | 上の候補 B1〜B3 から選び、w（重み）を決める。決まるまで `fly.readout` は変えない。下の「B の候補を試算した」を見て決める |
+| 読み出しへの MBON の加えかた（B） | **2026-10-14 に人間が B2（基準との比で足す）・w = 0.5 に決めた。** 下の「B の候補を試算した」で、報酬の学習が答えに出るのは B2 だけだったため。`fly.readout.mbon` に置き、既定は入れない（`enabled: false`）。入れるのは学習の腕と、その重み固定の対になる腕（Phase 6）で、`scripts/make_arm.py --mbon-baseline` で腕ごとに基準を置く。基準は 0.2 Hz ずれると差が約 3 Hz × w 動くので、**腕ごとに 10/16 からの実際の記録（`record_neurons` に MBON07・MBON11 を足す）から測る**（Phase 4「10/16 にすること」） |
 | 性格の記述 | `personality.md` と README の「学習ルールは抑圧のみ」は、規則の前提が変わった。書き直すかは人間が決める |
 
 **B の候補を、記録した観測で試算した（2026-10-14）。** 「区画の端」の 40 観測（重みを変えない基準、KC→MBON07 ×0.1、KC→MBON11 ×0.1）の

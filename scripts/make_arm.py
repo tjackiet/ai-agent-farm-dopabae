@@ -4,7 +4,8 @@
 腕とは、**方向の出どころだけが違う設定**のこと。設計メモ 4 章の評価 3・4 は
 腕どうしの比較で、replay（過去の足での再実行）ではない。ハエ版の腕は、網への
 入力のしかた（光受容細胞への入力の半飽和、1 観測のあいだに見せる動き、配色、
-格子を画像へ置く上下の向き）も変えられる。檻とリスクの値は変えない。`bitbank paper` の
+格子を画像へ置く上下の向き）と、読み出しの関門の有無・MBON の項（B2）も変えられる。
+檻とリスクの値は変えない。`bitbank paper` の
 約定判定を自前で真似ると、真似が本物とずれた分だけ評価が嘘になるためである。
 
 腕ごとに次を分ける。分けないと、同じペーパー口座と同じ判断ログを奪い合う。
@@ -22,6 +23,8 @@
     python3 scripts/make_arm.py fly-grow   --source fly --motion grow_last
     python3 scripts/make_arm.py fly-mono   --source fly --palette up=118,118,118 --palette down=118,118,118
     python3 scripts/make_arm.py fly-flipy  --source fly --flip-y false
+    python3 scripts/make_arm.py fly-hs1-nogate --source fly --half-saturation 1.0 --no-gate
+    python3 scripts/make_arm.py fly-b2     --source fly --mbon-baseline MBON11=17.7 --mbon-baseline MBON07=1.14
 
 作った設定で回す:
 
@@ -65,6 +68,21 @@ def parse_palette(items: list[str]) -> dict[str, list[int]]:
     return out
 
 
+def parse_mbon_baselines(items: list[str]) -> dict[str, float]:
+    """`TYPE=HZ` の並びを辞書にする。読めなければ ValueError。"""
+    out: dict[str, float] = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        try:
+            hz = float(value)
+        except ValueError:
+            hz = None
+        if not sep or not name.strip() or hz is None or not hz > 0:
+            raise ValueError(f"--mbon-baseline は 型名=正の Hz です: {item!r}")
+        out[name.strip()] = hz
+    return out
+
+
 def build(
     raw: dict,
     name: str,
@@ -75,11 +93,13 @@ def build(
     motion: str | None = None,
     palette: dict[str, list[int]] | None = None,
     flip_y: bool | None = None,
+    no_gate: bool = False,
+    mbon_baselines: dict[str, float] | None = None,
 ) -> dict:
     """正本の agent.yaml から、腕ぶんの設定を組み立てる。
 
     変えるのは方向の出どころ（ハエ版なら光受容細胞への入力の半飽和・見せる動き・配色・
-    格子の上下の向きも）と置き場所だけ。
+    格子の上下の向き・読み出しの関門の有無・MBON の項も）と置き場所だけ。
     檻とリスクの値は触らない。腕ごとに戦略が違うと、比べているものが方向の差でなくなる。
     """
     arm = json.loads(json.dumps(raw))  # 深い複製。元の辞書を壊さない
@@ -113,6 +133,18 @@ def build(
         arm["fly"]["vision"]["palette"].update(palette)
     if flip_y is not None:
         arm["fly"]["retina"]["flip_y"] = flip_y
+    if no_gate:
+        arm["fly"]["readout"]["gate_neurons"] = None
+    if mbon_baselines:
+        mbon = arm["fly"]["readout"].get("mbon")
+        if not mbon:
+            raise ValueError("元の設定に fly.readout.mbon がありません")
+        expected = {mbon["approach"], mbon["avoid"]}
+        if set(mbon_baselines) != expected:
+            raise ValueError(f"--mbon-baseline は {' と '.join(sorted(expected))} の両方を書きます: {sorted(mbon_baselines)}")
+        mbon["enabled"] = True
+        mbon["approach_baseline_hz"] = mbon_baselines[mbon["approach"]]
+        mbon["avoid_baseline_hz"] = mbon_baselines[mbon["avoid"]]
     return arm
 
 
@@ -145,6 +177,15 @@ def main(argv=None) -> int:
         "--flip-y", default=None, choices=("true", "false"),
         help="source=fly の格子を画像へ置く上下の向き（fly.retina.flip_y）。省けば正本と同じ",
     )
+    parser.add_argument(
+        "--no-gate", action="store_true",
+        help="source=fly の読み出しの関門（fly.readout.gate_neurons）を外す。差だけで方向を出す",
+    )
+    parser.add_argument(
+        "--mbon-baseline", action="append", default=[], metavar="TYPE=HZ",
+        help="source=fly の読み出しに MBON の項（fly.readout.mbon。B2）を入れ、その基準を置く。"
+             "approach と avoid の両方を書く。例: --mbon-baseline MBON11=17.7 --mbon-baseline MBON07=1.14",
+    )
     parser.add_argument("--config", default=None, help="元にする agent.yaml（既定はリポジトリ直下）")
     args = parser.parse_args(argv)
     if args.half_saturation is not None:
@@ -156,8 +197,11 @@ def main(argv=None) -> int:
         parser.error("--motion は --source fly の腕だけで使う（対照群は画像を見ない）")
     if (args.palette or args.flip_y is not None) and args.source != "fly":
         parser.error("--palette と --flip-y は --source fly の腕だけで使う（対照群は画像を見ない）")
+    if (args.no_gate or args.mbon_baseline) and args.source != "fly":
+        parser.error("--no-gate と --mbon-baseline は --source fly の腕だけで使う（対照群は網を回さない）")
     try:
         palette = parse_palette(args.palette)
+        mbon_baselines = parse_mbon_baselines(args.mbon_baseline)
     except ValueError as exc:
         parser.error(str(exc))
     flip_y = None if args.flip_y is None else args.flip_y == "true"
@@ -175,7 +219,13 @@ def main(argv=None) -> int:
 
     source_path = Path(args.config) if args.config else REPO_ROOT / "agent.yaml"
     raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-    arm = build(raw, args.name, args.source, args.seed, weights, args.half_saturation, args.motion, palette, flip_y)
+    try:
+        arm = build(
+            raw, args.name, args.source, args.seed, weights, args.half_saturation, args.motion, palette, flip_y,
+            args.no_gate, mbon_baselines,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     ARMS_DIR.mkdir(parents=True, exist_ok=True)
     target = ARMS_DIR / f"{args.name}.yaml"
@@ -188,6 +238,10 @@ def main(argv=None) -> int:
         parts.append("配色（" + "・".join(f"{k}={','.join(map(str, v))}" for k, v in palette.items()) + "）")
     if flip_y is not None:
         parts.append(f"格子の上下の向き（flip_y: {args.flip_y}）")
+    if args.no_gate:
+        parts.append("読み出しの関門（外した）")
+    if mbon_baselines:
+        parts.append("MBON の項（基準 " + "・".join(f"{k} {v:g} Hz" for k, v in mbon_baselines.items()) + "）")
     changed = "・".join(parts) + ("と置き場所" if len(parts) == 1 else "・置き場所")
     header = (
         f"# 評価の腕「{args.name}」（生成物。手で編集せず scripts/make_arm.py で作り直す）\n"

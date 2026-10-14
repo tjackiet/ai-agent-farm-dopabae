@@ -5,8 +5,9 @@
 
 - **網は売買を知らない。** 渡すのは画像だけで、残高・損益・保有量は渡さない
 - 読み出しは設計者が決めた読み替え（`fly.readout`）。2026-10-12 に人間が Stonkfly と同じもの
-  （右 DNp20 − 左 DNp20、DNpe017 が条件）に決めた。「ハエの脳に売買を判断する細胞がある」
-  という意味ではない
+  （右 DNp20 − 左 DNp20、DNpe017 が条件）に決めた。2026-10-14 に、学習の分を答えに入れるため
+  MBON の項（`fly.readout.mbon`。B2）を足せるようにした（入れるかは腕ごと）。「ハエの脳に売買を
+  判断する細胞がある」という意味ではない
 - 網の状態は観測をまたいで引き継ぐ（`fly.simulation.carry_state`）。状態のファイルが無ければ
   静止状態から始め、あっても今の網・値と合わなければ**読まずに失敗にする**（別の脳の状態を
   引き継がない。消すかどうかは人間が決める）
@@ -53,12 +54,35 @@ def select(network: connectome.Network, selectors: Sequence[str]) -> Any:
 
 
 def read(config: Config, network: connectome.Network, counts: Any, seconds: float) -> dict:
-    """発火数から、接近と回避の指標・差・関門・方向を出す。値は観測から計算するだけ。"""
+    """発火数から、接近と回避の指標・差・関門・方向を出す。値は観測から計算するだけ。
+
+    差は 右 DNp20 − 左 DNp20。`fly.readout.mbon` を入れた腕は、これに MBON の項を足す（B2）。
+    """
     approach = select(network, config.readout_approach)
     avoid = select(network, config.readout_avoid)
     approach_hz = float(counts[approach].mean()) / seconds
     avoid_hz = float(counts[avoid].mean()) / seconds
     axis_hz = approach_hz - avoid_hz
+    # MBON の項（fly.readout.mbon。B2）。入れた腕だけ、差に足す。学習で動いた分が答えに届くようにするため。
+    mbon = None
+    mbon_cells = None
+    if config.readout_mbon is not None:
+        term = config.readout_mbon
+        up_cells, down_cells = select(network, (term.approach,)), select(network, (term.avoid,))
+        up_hz = float(counts[up_cells].mean()) / seconds
+        down_hz = float(counts[down_cells].mean()) / seconds
+        term_hz = term.term_hz(up_hz, down_hz)
+        mbon = {
+            "hz": {term.approach: up_hz, term.avoid: down_hz},
+            "baseline_hz": {term.approach: term.approach_baseline_hz, term.avoid: term.avoid_baseline_hz},
+            "weight": term.weight,
+            "term_hz": term_hz,
+        }
+        mbon_cells = {
+            term.approach: [int(b) for b in network.body_ids[up_cells]],
+            term.avoid: [int(b) for b in network.body_ids[down_cells]],
+        }
+        axis_hz += term_hz
     gate_spikes = None
     if config.readout_gate:
         gate_spikes = int(counts[select(network, config.readout_gate)].sum())
@@ -88,11 +112,13 @@ def read(config: Config, network: connectome.Network, counts: Any, seconds: floa
         "approach_hz": approach_hz,
         "avoid_hz": avoid_hz,
         "axis_hz": axis_hz,
+        "mbon": mbon,
         "gate_spikes": gate_spikes,
         "cells": {
             "approach": [int(b) for b in network.body_ids[approach]],
             "avoid": [int(b) for b in network.body_ids[avoid]],
             "gate": [int(b) for b in network.body_ids[select(network, config.readout_gate)]] if config.readout_gate else None,
+            "mbon": mbon_cells,
         },
     }
 
@@ -262,6 +288,8 @@ def decide(
         "approach_hz": reading["approach_hz"],
         "avoid_hz": reading["avoid_hz"],
         "axis_hz": reading["axis_hz"],
+        # MBON の項を入れていない腕は null（差は DNp20 の左右だけ）
+        "mbon": reading["mbon"],
         "gate_spikes": reading["gate_spikes"],
         "rule": reading["rule"],
         "record_hz": reading["record_hz"],
@@ -281,8 +309,10 @@ def decide(
         # 学習を入れていない回は null（重みは配線図のまま）
         "learning": learning_record,
     }
+    mbon_part = f" ＋ MBON の項 {reading['mbon']['term_hz']:+.2f} Hz" if reading["mbon"] else ""
+    gate_part = "関門なし" if reading["gate_spikes"] is None else f"関門 {reading['gate_spikes']} 回"
     reason = (
-        f"接近の指標 {reading['approach_hz']:.2f} Hz − 回避の指標 {reading['avoid_hz']:.2f} Hz"
-        f"（関門 {reading['gate_spikes']} 回）→ {reading['rule']}"
+        f"接近の指標 {reading['approach_hz']:.2f} Hz − 回避の指標 {reading['avoid_hz']:.2f} Hz{mbon_part}"
+        f"（{gate_part}）→ {reading['rule']}"
     )
     return Direction(source="fly", value=reading["value"], reason=reason, observation=observation)
