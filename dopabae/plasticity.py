@@ -55,7 +55,7 @@ class RuleParams:
     memory_decay_sec: float
     min_fraction: float
     max_fraction: float
-    dan_baseline_hz: float
+    dan_baseline_hz: tuple[float, ...]  # 区画ごと（報酬、嫌悪の順）。DAN の発火率から差し引く
 
     @classmethod
     def from_settings(cls, settings: RewardSettings) -> "RuleParams":
@@ -88,6 +88,7 @@ class Circuit:
     edge_kc: Any  # 結合ごとに、kc_cells の何番目の KC から出ているか
     edge_mbon: Any  # 結合ごとの行き先（網の細胞番号）
     edge_compartment: Any  # 結合ごとに、compartments の何番目の区画か
+    dan_compartment: Any  # DAN ごとに、compartments の何番目の区画か
     kc_cells: Any  # 学習する結合を出している KC（網の細胞番号）
     dan_cells: Any  # 報酬の細胞、嫌悪の細胞の順（網の細胞番号）
     gain: Any  # (DAN の数, 結合の数)。各結合の列は、その区画の DAN にだけ値を持ち、和は 1
@@ -131,6 +132,7 @@ def identify(network: Network, compartments: tuple[tuple[str, str], ...]) -> Cir
         dan_groups.append(dans)
         mbon_groups.append(mbons)
     dan_cells = np.concatenate(dan_groups).astype(np.int64)
+    dan_compartment = np.concatenate([np.full(len(d), n, dtype=np.int64) for n, d in enumerate(dan_groups)])
 
     is_target = np.zeros(n, dtype=bool)
     for mbons in mbon_groups:
@@ -162,6 +164,7 @@ def identify(network: Network, compartments: tuple[tuple[str, str], ...]) -> Cir
         edge_kc=edge_kc.astype(np.int64),
         edge_mbon=edge_mbon,
         edge_compartment=edge_compartment,
+        dan_compartment=dan_compartment,
         kc_cells=kc_cells.astype(np.int64),
         dan_cells=dan_cells,
         gain=gain,
@@ -230,11 +233,12 @@ class Memory:
 
 
 def advance(
-    memory: Memory, circuit: Circuit, params: RuleParams, kc_rate: Any, dan_rate: Any, h: float, *, plastic: bool = True
+    memory: Memory, circuit: Circuit, params: RuleParams, kc_rate: Any, dan_rate: Any, h: float, *, plastic: Any = True
 ) -> None:
     """区切り 1 つぶん、痕跡と記憶を進める。式は Stonkfly の `rule.py` の `advance()` と同じ。
 
-    `plastic` が False なら drive を 0 にする（痕跡は進み、記憶は元へ戻っていく）。
+    `plastic` は学ぶ結合。True ならすべて、False ならどれも学ばない（drive を 0 にする）。結合ごとの真偽の配列なら、
+    そこだけ学ぶ。学ばない結合でも、痕跡は進み、記憶は元へ戻っていく。
     """
     np = _numpy()
     if not 0.0 < h <= MAX_BIN_SEC + 1e-12:
@@ -251,8 +255,10 @@ def advance(
     dan_trace_edge = circuit.gain.T @ d_mid
     dan_rate_edge = circuit.gain.T @ dan_rate
     drive = params.eta * (kc_rate[circuit.edge_kc] * dan_trace_edge - dan_rate_edge * k_mid[circuit.edge_kc])
-    if not plastic:
+    if plastic is False:
         drive = np.zeros_like(drive)
+    elif plastic is not True:
+        drive = np.where(plastic, drive, 0.0)
 
     tau_u, tau_w = params.memory_decay_sec, params.filter_sec
     e_u = math.exp(-h / tau_u)
@@ -269,12 +275,14 @@ def advance(
 class Learner:
     """`lif.simulate` に渡す差し込み口。区切りごとに発火数を受け取り、重みを書き換える。"""
 
-    def __init__(self, circuit: Circuit, params: RuleParams, memory: Memory, base_weight: Any, plastic: bool = True):
+    def __init__(self, circuit: Circuit, params: RuleParams, memory: Memory, base_weight: Any, plastic: Any = True):
         self.circuit = circuit
         self.params = params
         self.memory = memory
-        # False なら痕跡と記憶の減衰だけ進め、drive を 0 にする（刺激の無い観測では学ばない設定のため）
+        # 学ぶ結合（advance の plastic と同じ）。学ばない結合は痕跡と記憶の減衰だけ進む
         self.plastic = plastic
+        # DAN ごとの基準（区画の値を DAN に配る）
+        self.dan_baseline = _numpy().asarray(params.dan_baseline_hz, dtype=float)[circuit.dan_compartment]
         self.base = base_weight  # 学習する結合の元の重み（mV）。網の符号つきシナプス数 × 1 個あたりの重み
         self.cells = circuit.cells
         self._n_kc = len(circuit.kc_cells)
@@ -287,7 +295,7 @@ class Learner:
         """区切りのあいだの発火数（`cells` の順）から発火率を出し、規則を進めて重みを書き換える。"""
         rates = spikes / seconds
         kc_rate = rates[: self._n_kc]
-        dan_rate = rates[self._n_kc:] - self.params.dan_baseline_hz
+        dan_rate = rates[self._n_kc:] - self.dan_baseline
         advance(self.memory, self.circuit, self.params, kc_rate, dan_rate, seconds, plastic=self.plastic)
         weight[self.circuit.edges] = self.base * self.memory.efficacy()
 

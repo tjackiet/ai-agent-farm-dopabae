@@ -278,6 +278,16 @@ class RewardConfigTest(unittest.TestCase):
         self.assertFalse(cfg.reward.enabled)
         self.assertEqual(cfg.reward.compartments, (("PAM11", "MBON07"), ("PPL101", "MBON11")))
         self.assertEqual((cfg.reward.min_fraction, cfg.reward.max_fraction), (0.1, 2.0))
+        self.assertEqual(cfg.reward.dan_baseline_hz, (0.0, 77.0))
+        self.assertEqual(cfg.reward.learn_when, "stimulated_compartment")
+
+    def test_dan_baseline_needs_both_cells(self):
+        """型ごとに書く。数値 1 つなら両方に同じ値（前に作った腕が読めなくならないように）。"""
+        cfg = config_module.load(write(self.enabled(rule_dan_baseline_hz=0)))
+        self.assertEqual(cfg.reward.dan_baseline_hz, (0.0, 0.0))
+        for value in ({"PAM11": 0}, {"PAM11": 0, "PPL101": -1}, -5, "77", {"PAM11": 0, "PPL101": 77, "X": 1}):
+            with self.subTest(value=value), self.assertRaises(config_module.ConfigError):
+                config_module.load(write(self.enabled(rule_dan_baseline_hz=value)))
 
     def test_enabled_needs_threshold_and_decay(self):
         cfg = config_module.load(write(self.enabled()))

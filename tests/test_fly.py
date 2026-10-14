@@ -269,10 +269,19 @@ class LearningTest(unittest.TestCase):
         """learn_when が stimulus_only なら、刺激の無い観測では重みが動かない。"""
         cfg = dataclasses.replace(self.on, reward=dataclasses.replace(self.on.reward, learn_when="stimulus_only"))
         quiet = self.decide(cfg).observation["learning"]
-        self.assertFalse(quiet["plastic"])
+        self.assertEqual(quiet["learning_mbon"], [])
         self.assertEqual(quiet["changed_edges"], 0)
         self.assertEqual(set(quiet["by_mbon"]), {"MBON07", "MBON11"})
-        self.assertTrue(self.decide(cfg, stimulus="aversive").observation["learning"]["plastic"])
+        self.assertEqual(self.decide(cfg, stimulus="aversive").observation["learning"]["learning_mbon"], ["MBON07", "MBON11"])
+
+    def test_stimulated_compartment_learns_only_there(self):
+        """stimulated_compartment なら、報酬の観測では KC→MBON07 だけが動き、KC→MBON11 は動かない。"""
+        cfg = dataclasses.replace(self.on, reward=dataclasses.replace(self.on.reward, learn_when="stimulated_compartment"))
+        learning = self.decide(cfg, stimulus="reward").observation["learning"]
+        self.assertEqual(learning["learning_mbon"], ["MBON07"])
+        mbon11 = learning["by_mbon"]["MBON11"]
+        self.assertEqual((mbon11["min_efficacy"], mbon11["max_efficacy"]), (1.0, 1.0))
+        self.assertEqual(self.decide(cfg).observation["learning"]["learning_mbon"], [])
 
     def test_reset_memory_matches_the_fixed_network(self):
         """学習の状態を消せば（重みが元のまま）、刺激の無い観測は学習なしの網と同じ発火になる（完了の目安）。"""

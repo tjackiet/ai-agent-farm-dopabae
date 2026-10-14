@@ -182,7 +182,7 @@ class RewardSettings:
     memory_decay_sec: float | None
     min_fraction: float
     max_fraction: float
-    dan_baseline_hz: float
+    dan_baseline_hz: tuple[float, ...]  # 区画ごと（報酬の細胞、嫌悪の細胞の順）。ドーパミン細胞の発火率から差し引く
     learn_when: str | None
     weight_snapshot_every_n: int
     memory_path: str
@@ -376,8 +376,29 @@ def _readout(raw: Any) -> dict:
 REWARD_TRIGGERS = ("position_closed",)
 # 学習の規則。Stonkfly の rule.py と同じもの（dopabae/plasticity.py）。
 REWARD_RULES = ("stonkfly_centered",)
-# いつ学ぶか。always は毎回（自発発火でも重みが動く）、stimulus_only は報酬・嫌悪を与えた観測だけ。
-LEARN_WHEN = ("always", "stimulus_only")
+# いつ・どこを学ぶか。always は毎回すべての区画（自発発火でも重みが動く）、stimulus_only は報酬・嫌悪を
+# 与えた観測だけすべての区画、stimulated_compartment は与えた観測だけ、刺激した区画（報酬なら KC→MBON07）だけ。
+LEARN_WHEN = ("always", "stimulus_only", "stimulated_compartment")
+
+
+def _dan_baseline(raw: Any, path: str, base: str) -> tuple[float, ...]:
+    """ドーパミン細胞の型ごとの基準（Hz）。報酬の細胞と嫌悪の細胞の両方を、0 以上の値で書く。
+
+    数値 1 つなら、両方に同じ値を使う（2026-10-14 より前に作った腕は 0 を 1 つ書いている）。
+    """
+    value = _get(raw, path)
+    cells = (_str(raw, f"{base}.reward_cells"), _str(raw, f"{base}.aversive_cells"))
+    if not isinstance(value, bool) and isinstance(value, (int, float)):
+        value = {cell: value for cell in cells}
+    if not isinstance(value, dict) or set(value) != set(cells):
+        raise ConfigError(f"agent.yaml の {path} は {' と '.join(cells)} の Hz を書いた対応表です: {value!r}")
+    out = []
+    for cell in cells:
+        number = value[cell]
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or number < 0:
+            raise ConfigError(f"agent.yaml の {path}.{cell} は 0 以上の数値です: {number!r}")
+        out.append(float(number))
+    return tuple(out)
 
 
 def _reward(raw: Any, simulation: SimulationSettings) -> RewardSettings:
@@ -410,7 +431,7 @@ def _reward(raw: Any, simulation: SimulationSettings) -> RewardSettings:
         memory_decay_sec=optional_positive(f"{rule}.memory_decay_sec"),
         min_fraction=_num(raw, f"{rule}.min_fraction"),
         max_fraction=_num(raw, f"{rule}.max_fraction"),
-        dan_baseline_hz=_num(raw, f"{rule}.dan_baseline_hz"),
+        dan_baseline_hz=_dan_baseline(raw, f"{rule}.dan_baseline_hz", base),
         learn_when=None if _get(raw, f"{rule}.learn_when") is None else _choice(raw, f"{rule}.learn_when", LEARN_WHEN),
         weight_snapshot_every_n=_int(raw, f"{base}.weight_snapshot_every_n"),
         memory_path=_str(raw, f"{base}.memory_path"),

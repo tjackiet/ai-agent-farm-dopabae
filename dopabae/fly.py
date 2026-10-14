@@ -97,6 +97,10 @@ def read(config: Config, network: connectome.Network, counts: Any, seconds: floa
     }
 
 
+def _np_isin(values: Any, targets: list[int]) -> Any:
+    return connectome._numpy().isin(values, targets)
+
+
 class _Learning:
     """1 観測ぶんの学習の段取り。学習を入れていなければ作らない。"""
 
@@ -114,8 +118,16 @@ class _Learning:
         else:
             memory = plasticity.Memory.fresh(self.circuit)
         self.memory = memory
-        # 刺激の無い観測で学ぶかは fly.reward.rule.learn_when（人間が決める）。学ばない観測でも記憶は元へ戻っていく
-        self.plastic = settings.learn_when == "always" or stimulus != reward_module.NONE
+        # いつ・どこを学ぶかは fly.reward.rule.learn_when（人間が決める）。学ばない結合でも記憶は元へ戻っていく
+        self.learning_mbon = self._learning_mbon(settings, stimulus)
+        mbons = [mbon for _, mbon in settings.compartments]
+        if len(self.learning_mbon) == len(mbons):
+            plastic = True
+        elif not self.learning_mbon:
+            plastic = False
+        else:
+            plastic = _np_isin(self.circuit.edge_compartment, [mbons.index(m) for m in self.learning_mbon])
+        self.plastic = plastic
         self.learner = plasticity.Learner(
             self.circuit,
             self.params,
@@ -133,6 +145,18 @@ class _Learning:
                 raise FlyError(f"刺激する細胞が網にありません: {cell_type}")
             self.pulse = lif.Stimulus(index=index, current_mv=settings.pulse_mv)
             self.pulse_cells = [int(b) for b in network.body_ids[index]]
+
+    @staticmethod
+    def _learning_mbon(settings, stimulus: str) -> list[str]:
+        """この観測で学ぶ区画（MBON の型）。"""
+        mbons = [mbon for _, mbon in settings.compartments]
+        if settings.learn_when == "always":
+            return mbons
+        if stimulus == reward_module.NONE:
+            return []
+        if settings.learn_when == "stimulus_only":
+            return mbons
+        return [settings.reward_mbon if stimulus == reward_module.REWARD else settings.aversive_mbon]
 
     def finish(self, network: connectome.Network) -> dict:
         """観測の数を進めて保存し、決まった回数ごとに写しを取る。判断ログに残す値を返す。"""
@@ -154,7 +178,7 @@ class _Learning:
             "snapshot": snapshot,
             "rule_key": self.params.key(),
             "circuit_key": self.circuit.key(),
-            "plastic": self.plastic,
+            "learning_mbon": self.learning_mbon,  # この観測で学んだ区画。空なら学んでいない
             **self.memory.summary(self.params, self.circuit),
         }
 

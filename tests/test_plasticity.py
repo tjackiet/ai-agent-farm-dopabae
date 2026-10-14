@@ -49,7 +49,7 @@ def network(edges=EDGES):
 def params(**changes):
     base = plasticity.RuleParams(
         eta=0.001, trace_sec=1.0, filter_sec=0.05, memory_decay_sec=1800.0,
-        min_fraction=0.1, max_fraction=2.0, dan_baseline_hz=0.0,
+        min_fraction=0.1, max_fraction=2.0, dan_baseline_hz=(0.0, 0.0),
     )
     return dataclasses.replace(base, **changes)
 
@@ -174,12 +174,31 @@ class RuleTest(unittest.TestCase):
         self.assertTrue(np.allclose(memory.u, u, atol=1e-5))
         self.assertTrue(np.allclose(memory.w, w, atol=1e-5))
 
+    def test_mask_limits_learning_to_one_compartment(self):
+        """結合ごとの真偽で、学ぶ結合を絞れる。絞られた結合は動かない。"""
+        mask = self.circuit.edge_compartment == 0
+        memory = plasticity.Memory.fresh(self.circuit)
+        for kc_rate, dan_rate in [([100, 100, 100], [0, 0, 0])] * 5 + [([0, 0, 0], [200, 200, 200])] * 5:
+            plasticity.advance(memory, self.circuit, params(), np.asarray(kc_rate, float), np.asarray(dan_rate, float), 0.01, plastic=mask)
+        self.assertTrue((memory.w[mask] < 0).all())
+        self.assertTrue((memory.w[~mask] == 0).all())
+
     def test_bin_longer_than_10ms_is_refused(self):
         with self.assertRaises(plasticity.PlasticityError):
             plasticity.advance(plasticity.Memory.fresh(self.circuit), self.circuit, params(), np.zeros(3), np.zeros(3), 0.02)
 
 
 @unittest.skipIf(np is None, "numpy が無い")
+class BaselineTest(unittest.TestCase):
+    def test_baseline_is_subtracted_per_compartment(self):
+        """基準は区画ごとに DAN へ配られ、発火率から差し引かれる。"""
+        circuit = plasticity.identify(network(), COMPARTMENTS)
+        self.assertEqual(circuit.dan_compartment.tolist(), [0, 0, 1])
+        learner = plasticity.Learner(circuit, params(dan_baseline_hz=(0.0, 77.0)), plasticity.Memory.fresh(circuit),
+                                     plasticity.base_weight(network(), circuit, 0.275))
+        self.assertEqual(learner.dan_baseline.tolist(), [0.0, 0.0, 77.0])
+
+
 class LearnerTest(unittest.TestCase):
     def test_simulation_writes_learned_weights(self):
         """lif.simulate に渡すと、区切りごとに重みが書き換わり、記憶が残る。渡さなければ何も変わらない。"""
