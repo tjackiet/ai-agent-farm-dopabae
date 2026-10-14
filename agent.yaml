@@ -348,7 +348,7 @@ fly:
   reward:
     enabled: false # 2026-10-13 に人間が「Phase 4 と並行して実装し、学習はまだ入れない」と決めた
     trigger: position_closed # 決済が確定した回だけ。観測ごと・含み損益では出さない
-    threshold_jpy: null # この額以上の利益で報酬、この額以上の損で嫌悪。手数料より十分大きい値。人間が決める
+    threshold_jpy: 500 # この額以上の利益で報酬、この額以上の損で嫌悪。2026-10-14 に人間が 500 円に決めた
     reward_cells: PAM11 # 報酬 15 細胞（Stonkfly と同じ）
     aversive_cells: PPL101 # 嫌悪 2 細胞（Stonkfly と同じ）
     reward_mbon: MBON07 # PAM11 が変える KC→MBON の行き先（α1。Stonkfly の circuit.py と同じ対応）
