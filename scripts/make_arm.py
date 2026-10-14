@@ -95,10 +95,12 @@ def build(
     arm["memory"]["decisions"]["path"] = f"{base}/memory/decisions/{{date}}.jsonl"
     arm["memory"]["daily"]["path"] = f"{base}/memory/daily/{{date}}.md"
     arm["memory"]["lessons"]["path"] = f"{base}/memory/lessons.md"
-    arm["memory"]["weights"]["path"] = f"{base}/memory/weights/{{date}}.npz"
     arm["memory"]["vision"]["path"] = f"{base}/memory/vision/{{date}}/{{run_id}}.png"
     # 網の状態も腕ごとに分ける。分けないとハエ版の腕どうしが状態を上書きし合う。
     arm["fly"]["simulation"]["checkpoint_path"] = f"{base}/fly/state.npz"
+    # 学習の状態と報酬の台帳も腕ごと（Phase 5）。分けないと、腕どうしが記憶と決済を取り合う。
+    arm["fly"]["reward"]["memory_path"] = f"{base}/fly/memory.npz"
+    arm["fly"]["reward"]["ledger_path"] = f"{base}/fly/reward-ledger.json"
 
     arm["direction"]["source"] = source
     arm["direction"]["random_seed"] = seed

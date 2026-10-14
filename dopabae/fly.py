@@ -12,6 +12,9 @@
   引き継がない。消すかどうかは人間が決める）
 - 失敗（網・座標表・状態が読めない、画像が無い、シミュレーションの失敗）はすべて例外にする。
   呼び出し側（`direction.resolve`）が方向の失敗として HOLD にする
+- 学習（`fly.reward.enabled`。Phase 5）を入れたときだけ、KC→MBON の重みが観測ごとに変わる
+  （`dopabae/plasticity.py`）。報酬・嫌悪は呼び出し側が決済の損益から決め（`dopabae/reward.py`）、
+  ここには「報酬 / 嫌悪 / なし」だけが届く。観測の頭から `pulse_ms` のあいだ、ドーパミン細胞に電流を流す
 
 判断ログに残すのは観測した値（発火数・発火率・差・関門の発火数）と、どの規則を当てたかだけ。
 解釈は書かない（CLAUDE.md）。
@@ -19,10 +22,12 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import connectome, lif, retina
+from . import connectome, lif, plasticity, retina
+from . import reward as reward_module
 from .config import REPO_ROOT, Config
 from .direction import APPROACH, AVOID, NONE, Direction
 from .vision import Image
@@ -92,19 +97,90 @@ def read(config: Config, network: connectome.Network, counts: Any, seconds: floa
     }
 
 
+class _Learning:
+    """1 観測ぶんの学習の段取り。学習を入れていなければ作らない。"""
+
+    def __init__(self, config: Config, network: connectome.Network, root: Path, stimulus: str):
+        settings = config.reward
+        self.settings = settings
+        self.params = plasticity.RuleParams.from_settings(settings)
+        self.circuit = plasticity.identify(network, settings.compartments)
+        self.path = root / settings.memory_path
+        self.origin = "rest"
+        if self.path.exists():
+            # 合わなければ PlasticityError（HOLD）。ファイルは残す（消すかどうかは人間が決める）
+            memory = plasticity.load_memory(self.path, network, self.circuit, self.params)
+            self.origin = "carried"
+        else:
+            memory = plasticity.Memory.fresh(self.circuit)
+        self.memory = memory
+        # 刺激の無い観測で学ぶかは fly.reward.rule.learn_when（人間が決める）。学ばない観測でも記憶は元へ戻っていく
+        self.plastic = settings.learn_when == "always" or stimulus != reward_module.NONE
+        self.learner = plasticity.Learner(
+            self.circuit,
+            self.params,
+            memory,
+            plasticity.base_weight(network, self.circuit, config.simulation.weight_per_synapse_mv),
+            plastic=self.plastic,
+        )
+        self.stimulus_name = stimulus
+        self.pulse = None
+        self.pulse_cells: list[int] = []
+        if stimulus != reward_module.NONE:
+            cell_type = settings.reward_cells if stimulus == reward_module.REWARD else settings.aversive_cells
+            index = network.type_index((cell_type,))
+            if not len(index):
+                raise FlyError(f"刺激する細胞が網にありません: {cell_type}")
+            self.pulse = lif.Stimulus(index=index, current_mv=settings.pulse_mv)
+            self.pulse_cells = [int(b) for b in network.body_ids[index]]
+
+    def finish(self, network: connectome.Network) -> dict:
+        """観測の数を進めて保存し、決まった回数ごとに写しを取る。判断ログに残す値を返す。"""
+        self.memory.observations += 1
+        sha256 = plasticity.save_memory(self.memory, self.path, network, self.circuit, self.params)
+        snapshot = None
+        if self.memory.observations % self.settings.weight_snapshot_every_n == 0:
+            target = self.path.parent / "snapshots" / f"memory-{self.memory.observations:06d}.npz"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.path, target)
+            snapshot = target.name
+        return {
+            "stimulus": self.stimulus_name,
+            "pulse_cells": self.pulse_cells,
+            "pulse_mv": self.settings.pulse_mv if self.pulse is not None else None,
+            "pulse_ms": self.settings.pulse_ms if self.pulse is not None else None,
+            "memory_from": self.origin,
+            "memory_sha256": sha256,
+            "snapshot": snapshot,
+            "rule_key": self.params.key(),
+            "circuit_key": self.circuit.key(),
+            "plastic": self.plastic,
+            **self.memory.summary(self.params, self.circuit),
+        }
+
+
 def decide(
     config: Config,
     frames: Sequence[Image] | None,
     *,
+    stimulus: str = reward_module.NONE,
     network: connectome.Network | None = None,
     column_map: retina.ColumnMap | None = None,
     repo_root: Path | None = None,
 ) -> Direction:
-    """画像の枚を見せて網を動かし、方向を返す。`network` と `column_map` は差し替え口（テスト用）。"""
+    """画像の枚を見せて網を動かし、方向を返す。`network` と `column_map` は差し替え口（テスト用）。
+
+    `stimulus` はドーパミン細胞への刺激（`reward.NONE` / `REWARD` / `AVERSIVE`）。学習を入れていないときに
+    なし以外が来たら失敗にする（学習しない網に刺激を入れない）。
+    """
     if not frames:
         raise FlyError("ハエに見せる画像がありません")
     if config.readout_approach is None or config.readout_avoid is None:
         raise FlyError("fly.readout が決まっていません")
+    if stimulus not in (reward_module.NONE, reward_module.REWARD, reward_module.AVERSIVE):
+        raise FlyError(f"扱えない刺激です: {stimulus}")
+    if stimulus != reward_module.NONE and not config.reward.enabled:
+        raise FlyError("学習を入れていない網に、報酬・嫌悪の刺激は入れません")
     root = repo_root if repo_root is not None else REPO_ROOT
     spec = connectome.spec_from_config(config)
     if network is None:
@@ -129,17 +205,35 @@ def decide(
         state = lif.load_state(state_path, network, params)  # 合わなければ SimulationError（HOLD）
         state_origin = "carried"
 
+    learning = _Learning(config, network, root, stimulus) if config.reward.enabled else None
+    learner = learning.learner if learning is not None else None
+
     duration_ms = sim.neural_time_sec * 1000.0
+    frame_ms = duration_ms / len(lights)
+    # 刺激は観測の頭から pulse_ms のあいだ（Stonkfly と同じ）。枚をまたぐときは枚ごとに分けて流す。
+    pulse_left = config.reward.pulse_ms if learning is not None and learning.pulse is not None else 0.0
     counts = None
     wall = 0.0
     for light in lights:
-        result = lif.simulate(network, params, duration_ms / len(lights), light=light, state=state)
-        state = result.state
-        counts = result.spike_counts if counts is None else counts + result.spike_counts
-        wall += result.wall_sec
-    state_sha256 = lif.save_state(state, state_path, network, params) if sim.carry_state else None
-
+        segments = []
+        if pulse_left > 0:
+            first = min(pulse_left, frame_ms)
+            segments.append((first, learning.pulse))
+            pulse_left -= first
+            if frame_ms - first > 1e-9:
+                segments.append((frame_ms - first, None))
+        else:
+            segments.append((frame_ms, None))
+        for length, extra in segments:
+            result = lif.simulate(network, params, length, light=light, stimulus=extra, state=state, learner=learner)
+            state = result.state
+            counts = result.spike_counts if counts is None else counts + result.spike_counts
+            wall += result.wall_sec
+    # 読み出しを先に済ませる（ここで失敗すれば何も保存しない）。次に学習の状態、最後に網の状態を保存する。
+    # 学習の状態の保存に失敗すれば網の状態も保存せず、次の回は前の状態と前の記憶から続く。
     reading = read(config, network, counts, duration_ms / 1000.0)
+    learning_record = learning.finish(network) if learning is not None else None
+    state_sha256 = lif.save_state(state, state_path, network, params) if sim.carry_state else None
     observation = {
         "approach_hz": reading["approach_hz"],
         "avoid_hz": reading["avoid_hz"],
@@ -160,6 +254,8 @@ def decide(
         "network_key": spec.key(),
         "params_key": params.key(),
         "column_map_sha256": column_map.sha256,
+        # 学習を入れていない回は null（重みは配線図のまま）
+        "learning": learning_record,
     }
     reason = (
         f"接近の指標 {reading['approach_hz']:.2f} Hz − 回避の指標 {reading['avoid_hz']:.2f} Hz"

@@ -340,16 +340,38 @@ fly:
     # （0.02）ので、関門の開き具合が点火で変わる。評価では点火の前後を分けて見る。
     record_neurons: [lLN1_bc]
 
+  # 学習（Phase 5。dopabae/plasticity.py・dopabae/reward.py）。
+  # 決済が確定した回だけ、確定損益から報酬か嫌悪かを決め、ドーパミン細胞に一定電流を流す。
+  # つながりの強さは、ドーパミン細胞と KC の発火の順序で変わる（Stonkfly の rule.py と同じ規則。
+  # 2026-10-13 にソースで確かめた。ドーパミンの前に発火した KC の結合は弱まり、あとに発火した KC の結合は強まる）。
+  # 学習で変わるのはシナプスの重みだけ。ここの値はハエが書き換えない（CLAUDE.md）。null は未決で、人間が決める。
   reward:
-    enabled: false # Phase 5 まで無効。学習なしで動かす
-    trigger: position_closed # 決済が確定した回だけ。観測ごとには出さない
-    threshold_jpy: null # 手数料より十分大きい値。Phase 5 で決める
-    reward_cells: PAM11 # 報酬 15 細胞（Stonkfly と同じ細胞群から始める）
-    aversive_cells: PPL101 # 嫌悪 2 細胞
-    plasticity_edges: [KC->MBON07, KC->MBON11]
-    rule: anti_hebbian # まずは Stonkfly と同じ（抑圧のみ）
-    memory_decay_sec: null # Stonkfly は 1,800 秒。運用スケール（日〜週）に伸ばす。未検証
-    weight_snapshot_every_n: 96 # 何回の観測ごとに重みを保存するか（15分間隔なら1日）
+    enabled: false # 2026-10-13 に人間が「Phase 4 と並行して実装し、学習はまだ入れない」と決めた
+    trigger: position_closed # 決済が確定した回だけ。観測ごと・含み損益では出さない
+    threshold_jpy: null # この額以上の利益で報酬、この額以上の損で嫌悪。手数料より十分大きい値。人間が決める
+    reward_cells: PAM11 # 報酬 15 細胞（Stonkfly と同じ）
+    aversive_cells: PPL101 # 嫌悪 2 細胞（Stonkfly と同じ）
+    reward_mbon: MBON07 # PAM11 が変える KC→MBON の行き先（α1。Stonkfly の circuit.py と同じ対応）
+    aversive_mbon: MBON11 # PPL101 が変える行き先（γ1pedc）
+    pulse_mv: 20 # ドーパミン細胞に流す一定電流（Stonkfly の docs/model.md と同じ）
+    pulse_ms: 200 # 観測の頭から流す長さ（Stonkfly と同じ。頭から流すのも同じ）
+    rule:
+      name: stonkfly_centered
+      eta: 0.001 # Stonkfly の既定（brain.py）
+      trace_sec: 1.0 # KC とドーパミン細胞の痕跡の時定数（神経時間）
+      filter_sec: 0.05 # 記憶が効き目になるまでの遅れ（神経時間）
+      # 記憶が元へ戻る時定数（神経時間）。Stonkfly は 1,800 秒。ドパバエは 1 観測 0.5 秒・15 分おきなので、
+      # 神経時間 1 秒が実時間 30 分にあたる（1,800 秒なら実時間で約 37 日）。人間が決める
+      memory_decay_sec: null
+      min_fraction: 0.1 # つながりの強さの下限（元の何倍か。Stonkfly と同じ）
+      max_fraction: 2.0 # 上限（Stonkfly と同じ）
+      dan_baseline_hz: 0 # ドーパミン細胞の発火率から差し引く値。Stonkfly は差し引くが値は未確認
+      # いつ学ぶか。always = 毎回（Stonkfly と同じ。ドーパミン細胞の自発発火でも重みが動く）、
+      # stimulus_only = 報酬・嫌悪を与えた観測だけ（ほかの観測は記憶が元へ戻るだけ）。人間が決める
+      learn_when: null
+    weight_snapshot_every_n: 96 # 何回の観測ごとに学習の状態を写すか（15 分おきなら 1 日）。memory_path の隣の snapshots/ に置く
+    memory_path: var/fly/memory.npz # 学習の状態（Git 管理外）。腕ごとに置き場所を変える
+    ledger_path: var/fly/reward-ledger.json # どの決済まで報酬・嫌悪に使ったか（二重に出さないため）
 
 # 記録の言語化。日誌の「おれの一日」を、ドパバエ自身の言葉で書く。
 #
@@ -399,8 +421,6 @@ memory:
     path: var/memory/lessons.md
     max_entries: 50
     write_trigger: position_closed
-  weights:
-    path: "var/memory/weights/{date}.npz" # シナプス重みのスナップショット。Git 管理外
   vision:
     # ハエに見せた画像。人間が「何を見せたか」を確認するために PNG で残す。Git 管理外。
     # ハッシュと足の範囲は判断ログにも残る。

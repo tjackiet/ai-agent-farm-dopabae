@@ -86,6 +86,7 @@ def build_record(
     sources: Sequence[Source],
     warnings: Sequence[str] = (),
     error: str | None = None,
+    reinforcement: dict | None = None,
 ) -> dict:
     return {
         "run_id": run_id,
@@ -111,4 +112,7 @@ def build_record(
         "sources": [s.as_dict() for s in sources],
         "warnings": list(warnings),
         "error": error,
+        # その回に与えたドーパミン刺激（なし / 報酬 / 嫌悪）と、根拠にした確定損益（Phase 5）。
+        # 学習を入れていない回は null。損益が取れなかった回は刺激を出さず、損益は null
+        "reinforcement": reinforcement,
     }

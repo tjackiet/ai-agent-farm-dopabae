@@ -91,6 +91,14 @@ class ConditionsTest(unittest.TestCase):
         self.assertEqual(plasticity.CONDITIONS["zero"][1], {"scale": 0.0})
         self.assertEqual(plasticity.PLASTIC_TYPES, ("MBON07", "MBON11"))
 
+    def test_compartment_conditions_stay_within_stonkfly_bounds(self):
+        """区画ごとの条件は 1 つの型だけを、Stonkfly の上下限（0.1〜2.0 倍）の端まで動かす。"""
+        for name in ("m07_low", "m07_high", "m11_low", "m11_high"):
+            types = plasticity.CONDITIONS[name][1]["scale_types"]
+            self.assertEqual(len(types), 1)
+            self.assertTrue(set(types) <= set(plasticity.PLASTIC_TYPES))
+            self.assertIn(next(iter(types.values())), (0.1, 2.0))
+
 
 if __name__ == "__main__":
     unittest.main()

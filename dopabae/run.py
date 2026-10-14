@@ -20,6 +20,7 @@ from . import lock as lock_module
 from . import observe
 from . import narrate as narrate_module
 from . import performance as performance_module
+from . import reward as reward_module
 from . import state as state_module
 from . import summary as summary_module
 from . import timeutil, vision as vision_module
@@ -43,6 +44,7 @@ class Cycle:
     warnings: list[str]
     error: str | None = None
     status_written: bool = False
+    reinforcement: dict | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +60,7 @@ class Cycle:
             "sources": self.sources,
             "warnings": self.warnings,
             "error": self.error,
+            "reinforcement": self.reinforcement,
             "status_written": self.status_written,
         }
 
@@ -179,6 +182,19 @@ def run_once(
     except (ValueError, KeyError, TypeError) as exc:
         error = f"観測を解釈できません: {exc}"
 
+    # 学習を入れたときだけ、決済の損益から報酬・嫌悪を決める（決定的なコード。ハエは関わらない）。
+    # 台帳が読めない回は、二重に出さないよう何もせず HOLD にする。
+    reinforcement: reward_module.Reinforcement | None = None
+    if error is None and cfg.reward.enabled:
+        root = repo_root if repo_root is not None else config_module.REPO_ROOT
+        try:
+            ledger = reward_module.load_ledger(root / cfg.reward.ledger_path)
+            reinforcement = reward_module.judge(
+                trades, ledger, cfg.reward.threshold_jpy, spec.unit_amount if spec is not None else None
+            )
+        except reward_module.LedgerError as exc:
+            error = str(exc)
+
     # 方向は観測が済んでから諮る。観測に失敗した回は諮らない（記録には null）。
     resolved: direction_module.Direction | None = None
     if error is not None:
@@ -198,9 +214,18 @@ def run_once(
                 cage=cage.GUARD,
             )
         else:
-            resolved = (resolver or direction_module.resolve)(cfg, run_id, frames)
+            if reinforcement is None:
+                resolved = (resolver or direction_module.resolve)(cfg, run_id, frames)
+            else:
+                resolved = (resolver or direction_module.resolve)(
+                    cfg, run_id, frames, stimulus=reinforcement.stimulus
+                )
             if resolved.error is not None:
                 client.warnings.append(f"方向を得られませんでした: {resolved.error}")
+            elif reinforcement is not None:
+                # ハエが刺激を受け取ったので、使った決済を台帳に書く（このあと HOLD になっても二度は出さない）。
+                root = repo_root if repo_root is not None else config_module.REPO_ROOT
+                reward_module.save_ledger(root / cfg.reward.ledger_path, reinforcement.last_closed_at)
             elapsed = time.monotonic() - started
             if elapsed > cfg.max_runtime_sec:
                 # ハエのシミュレーションで時間がかかると、観測した気配が古くなる。古い気配では発注しない。
@@ -267,6 +292,7 @@ def run_once(
         sources=client.sources,
         warnings=client.warnings,
         error=error,
+        reinforcement=reinforcement.as_dict() if reinforcement is not None else None,
     )
     journal.append(cfg, now, record, root=repo_root)
 
@@ -318,6 +344,7 @@ def run_once(
         warnings=list(client.warnings),
         error=error,
         status_written=status_written,
+        reinforcement=reinforcement.as_dict() if reinforcement is not None else None,
     )
 
 

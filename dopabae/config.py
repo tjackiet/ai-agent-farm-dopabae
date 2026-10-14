@@ -163,6 +163,38 @@ class SimulationSettings:
 
 
 @dataclass(frozen=True)
+class RewardSettings:
+    """学習（fly.reward）。値はハエが書き換えない。null は未決で、人間が決めるまで学習を入れられない。"""
+
+    enabled: bool
+    trigger: str
+    threshold_jpy: float | None
+    reward_cells: str
+    aversive_cells: str
+    reward_mbon: str
+    aversive_mbon: str
+    pulse_mv: float
+    pulse_ms: float
+    rule: str
+    eta: float
+    trace_sec: float
+    filter_sec: float
+    memory_decay_sec: float | None
+    min_fraction: float
+    max_fraction: float
+    dan_baseline_hz: float
+    learn_when: str | None
+    weight_snapshot_every_n: int
+    memory_path: str
+    ledger_path: str
+
+    @property
+    def compartments(self) -> tuple[tuple[str, str], ...]:
+        """(ドーパミン細胞の型, その区画の MBON の型)。報酬、嫌悪の順。"""
+        return ((self.reward_cells, self.reward_mbon), (self.aversive_cells, self.aversive_mbon))
+
+
+@dataclass(frozen=True)
 class Config:
     """agent.yaml の内容。すべて読み取り専用。"""
 
@@ -274,6 +306,8 @@ class Config:
     retina_flip_x: bool
     retina_flip_y: bool
 
+    reward: RewardSettings
+
     raw: dict
 
 
@@ -336,6 +370,83 @@ def _readout(raw: Any) -> dict:
     if out["gate_min_spikes"] < 1:
         raise ConfigError(f"agent.yaml の {base}.gate_min_spikes は 1 以上です")
     return out
+
+
+# 報酬・嫌悪を出すきっかけ。決済が確定した回だけ（CLAUDE.md）。
+REWARD_TRIGGERS = ("position_closed",)
+# 学習の規則。Stonkfly の rule.py と同じもの（dopabae/plasticity.py）。
+REWARD_RULES = ("stonkfly_centered",)
+# いつ学ぶか。always は毎回（自発発火でも重みが動く）、stimulus_only は報酬・嫌悪を与えた観測だけ。
+LEARN_WHEN = ("always", "stimulus_only")
+
+
+def _reward(raw: Any, simulation: SimulationSettings) -> RewardSettings:
+    """fly.reward。学習で変わるのはシナプスの重みだけで、ここの値はハエが書き換えない（CLAUDE.md）。"""
+    base = "fly.reward"
+    rule = f"{base}.rule"
+
+    def optional_positive(path: str) -> float | None:
+        if _get(raw, path) is None:
+            return None
+        value = _num(raw, path)
+        if value <= 0:
+            raise ConfigError(f"agent.yaml の {path} は正の値か null です")
+        return value
+
+    settings = RewardSettings(
+        enabled=_bool(raw, f"{base}.enabled"),
+        trigger=_choice(raw, f"{base}.trigger", REWARD_TRIGGERS),
+        threshold_jpy=optional_positive(f"{base}.threshold_jpy"),
+        reward_cells=_str(raw, f"{base}.reward_cells"),
+        aversive_cells=_str(raw, f"{base}.aversive_cells"),
+        reward_mbon=_str(raw, f"{base}.reward_mbon"),
+        aversive_mbon=_str(raw, f"{base}.aversive_mbon"),
+        pulse_mv=_num(raw, f"{base}.pulse_mv"),
+        pulse_ms=_num(raw, f"{base}.pulse_ms"),
+        rule=_choice(raw, f"{rule}.name", REWARD_RULES),
+        eta=_num(raw, f"{rule}.eta"),
+        trace_sec=_num(raw, f"{rule}.trace_sec"),
+        filter_sec=_num(raw, f"{rule}.filter_sec"),
+        memory_decay_sec=optional_positive(f"{rule}.memory_decay_sec"),
+        min_fraction=_num(raw, f"{rule}.min_fraction"),
+        max_fraction=_num(raw, f"{rule}.max_fraction"),
+        dan_baseline_hz=_num(raw, f"{rule}.dan_baseline_hz"),
+        learn_when=None if _get(raw, f"{rule}.learn_when") is None else _choice(raw, f"{rule}.learn_when", LEARN_WHEN),
+        weight_snapshot_every_n=_int(raw, f"{base}.weight_snapshot_every_n"),
+        memory_path=_str(raw, f"{base}.memory_path"),
+        ledger_path=_str(raw, f"{base}.ledger_path"),
+    )
+    if settings.eta < 0 or settings.trace_sec <= 0 or settings.filter_sec <= 0:
+        raise ConfigError(f"agent.yaml の {rule} の eta は 0 以上、trace_sec と filter_sec は正の値です")
+    if not 0 < settings.min_fraction < 1 < settings.max_fraction:
+        raise ConfigError(f"agent.yaml の {rule} は 0 < min_fraction < 1 < max_fraction です")
+    if settings.memory_decay_sec is not None and settings.memory_decay_sec <= settings.filter_sec:
+        raise ConfigError(f"agent.yaml の {rule}.memory_decay_sec は filter_sec より長くします")
+    if settings.weight_snapshot_every_n < 1:
+        raise ConfigError(f"agent.yaml の {base}.weight_snapshot_every_n は 1 以上です")
+    # 刺激は観測の頭から pulse_ms のあいだ流す。区切りの倍数でないと、刺激の終わりが区切りの途中に落ちる。
+    chunks = settings.pulse_ms / simulation.input_chunk_ms
+    if (
+        abs(chunks - round(chunks)) > 1e-9
+        or round(chunks) < 1
+        or settings.pulse_ms > simulation.neural_time_sec * 1000.0
+    ):
+        raise ConfigError(
+            f"agent.yaml の {base}.pulse_ms は photoreceptor_input.chunk_ms の倍数で、神経時間以下です"
+        )
+    if settings.enabled:
+        missing = [
+            name
+            for name, value in (
+                ("threshold_jpy", settings.threshold_jpy),
+                ("rule.memory_decay_sec", settings.memory_decay_sec),
+                ("rule.learn_when", settings.learn_when),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ConfigError(f"fly.reward.enabled を true にするには、fly.reward の {missing} が要ります（人間が決める）")
+    return settings
 
 
 def _connectome_files(raw: Any) -> dict[str, ConnectomeFile]:
@@ -581,6 +692,10 @@ def load(path: Path | str | None = None) -> Config:
         if missing:
             raise ConfigError(f"direction.source が fly のとき、fly.readout の {missing} が要ります（人間が決める）")
 
+    reward = _reward(raw, simulation)
+    if reward.enabled and direction_source != "fly":
+        raise ConfigError("fly.reward.enabled を true にできるのは direction.source が fly のときだけです")
+
     halt = _num(raw, "risk.drawdown.halt_new_buys_pct")
     forced = _num(raw, "risk.drawdown.forced_exit_pct")
     if forced >= halt:
@@ -676,5 +791,6 @@ def load(path: Path | str | None = None) -> Config:
         retina_field_px=field_px,
         retina_flip_x=_bool(raw, "fly.retina.flip_x"),
         retina_flip_y=_bool(raw, "fly.retina.flip_y"),
+        reward=reward,
         raw=raw,
     )

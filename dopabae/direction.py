@@ -88,11 +88,12 @@ def random_direction(
     return Direction(source="random", value=value, reason=reason, seed=actual)
 
 
-def resolve(config: Config, run_key: str, frames=None) -> Direction:
+def resolve(config: Config, run_key: str, frames=None, stimulus: str = "none") -> Direction:
     """設定に従って方向を得る。出どころの例外はすべて失敗として返す。
 
     `frames` はハエに見せる画像の枚（`vision.render_frames`）。描けなかった回は None で、
     ハエ版は失敗（HOLD）になる。対照群は画像を見ない。
+    `stimulus` はハエのドーパミン細胞への刺激（`reward.judge` が決める。学習を入れたときだけ）。
     """
     source = config.direction_source
     try:
@@ -105,7 +106,7 @@ def resolve(config: Config, run_key: str, frames=None) -> Direction:
         if source == "fly":
             from . import fly  # numpy・配線図が要るので、使うときだけ読む
 
-            return fly.decide(config, frames)
+            return fly.decide(config, frames, stimulus=stimulus)
     except Exception as exc:  # noqa: BLE001 - 出どころの失敗で落とさず、檻に HOLD させる
         return failed(source, f"{type(exc).__name__}: {exc}")
     return failed(source, f"扱えない出どころです: {source}")
