@@ -182,7 +182,7 @@ class RewardSettings:
     memory_decay_sec: float | None
     min_fraction: float
     max_fraction: float
-    dan_baseline_hz: float
+    dan_baseline_hz: tuple[float, ...]  # 区画ごと（報酬の細胞、嫌悪の細胞の順）。ドーパミン細胞の発火率から差し引く
     learn_when: str | None
     weight_snapshot_every_n: int
     memory_path: str
@@ -192,6 +192,25 @@ class RewardSettings:
     def compartments(self) -> tuple[tuple[str, str], ...]:
         """(ドーパミン細胞の型, その区画の MBON の型)。報酬、嫌悪の順。"""
         return ((self.reward_cells, self.reward_mbon), (self.aversive_cells, self.aversive_mbon))
+
+
+@dataclass(frozen=True)
+class MbonTerm:
+    """読み出しの差に足す MBON の項（fly.readout.mbon。2026-10-14 に人間が B2・w = 0.5 に決めた）。
+
+    項 = w × 基準（足す側）×［足す側 ÷ 基準 − 引く側 ÷ 基準］。どちらも基準どおりなら 0。
+    基準は腕ごとに、重みを変えない網の実測から人間が決める。値はハエが書き換えない。
+    """
+
+    approach: str  # 発火が基準より上がると、差を＋（近づく）へ動かす型
+    avoid: str  # 発火が基準より上がると、差を−（逃げる）へ動かす型
+    weight: float
+    approach_baseline_hz: float
+    avoid_baseline_hz: float
+
+    def term_hz(self, approach_hz: float, avoid_hz: float) -> float:
+        ratio = approach_hz / self.approach_baseline_hz - avoid_hz / self.avoid_baseline_hz
+        return self.weight * self.approach_baseline_hz * ratio
 
 
 @dataclass(frozen=True)
@@ -284,6 +303,7 @@ class Config:
     readout_gate: tuple[str, ...] | None
     readout_gate_min_spikes: int
     readout_record: tuple[str, ...] | None
+    readout_mbon: MbonTerm | None  # null は MBON を足さない（enabled: false か、書いていない古い腕）
     vision_path: str
 
     # 配線図（fly.connectome）。データはリポジトリに含めず、取得元と指紋だけを持つ。
@@ -369,15 +389,80 @@ def _readout(raw: Any) -> dict:
         raise ConfigError(f"agent.yaml の {base}.avoid_threshold_hz は負の値です")
     if out["gate_min_spikes"] < 1:
         raise ConfigError(f"agent.yaml の {base}.gate_min_spikes は 1 以上です")
+    out["mbon"] = _mbon_term(raw)
     return out
+
+
+def _mbon_term(raw: Any) -> MbonTerm | None:
+    """fly.readout.mbon。書いていなければ足さない（2026-10-14 より前に作った腕）。
+
+    基準（Hz）は null なら未決。enabled を true にするには、両方の基準が要る（比をとるので 0 も不可）。
+    """
+    base = "fly.readout.mbon"
+    readout = _get(raw, "fly.readout")
+    if not isinstance(readout, dict) or "mbon" not in readout:
+        return None
+    enabled = _bool(raw, f"{base}.enabled")
+    names = {}
+    for key in ("approach", "avoid"):
+        name = _str(raw, f"{base}.{key}")
+        if not name.strip() or ":" in name:
+            raise ConfigError(f"agent.yaml の {base}.{key} は型名です: {name!r}")
+        names[key] = name
+    if names["approach"] == names["avoid"]:
+        raise ConfigError(f"agent.yaml の {base}.approach と avoid は別の型です")
+    weight = _num(raw, f"{base}.weight")
+    if weight <= 0:
+        raise ConfigError(f"agent.yaml の {base}.weight は正の値です")
+    baselines = {}
+    for key in ("approach_baseline_hz", "avoid_baseline_hz"):
+        if _get(raw, f"{base}.{key}") is None:
+            baselines[key] = None
+            continue
+        baselines[key] = _num(raw, f"{base}.{key}")
+        if baselines[key] <= 0:
+            raise ConfigError(f"agent.yaml の {base}.{key} は正の値か null です（比をとるので 0 は使えない）")
+    if not enabled:
+        return None
+    missing = [k for k, v in baselines.items() if v is None]
+    if missing:
+        raise ConfigError(f"fly.readout.mbon.enabled が true のとき、{missing} が要ります（腕ごとに実測して人間が決める）")
+    return MbonTerm(
+        approach=names["approach"],
+        avoid=names["avoid"],
+        weight=weight,
+        approach_baseline_hz=baselines["approach_baseline_hz"],
+        avoid_baseline_hz=baselines["avoid_baseline_hz"],
+    )
 
 
 # 報酬・嫌悪を出すきっかけ。決済が確定した回だけ（CLAUDE.md）。
 REWARD_TRIGGERS = ("position_closed",)
 # 学習の規則。Stonkfly の rule.py と同じもの（dopabae/plasticity.py）。
 REWARD_RULES = ("stonkfly_centered",)
-# いつ学ぶか。always は毎回（自発発火でも重みが動く）、stimulus_only は報酬・嫌悪を与えた観測だけ。
-LEARN_WHEN = ("always", "stimulus_only")
+# いつ・どこを学ぶか。always は毎回すべての区画（自発発火でも重みが動く）、stimulus_only は報酬・嫌悪を
+# 与えた観測だけすべての区画、stimulated_compartment は与えた観測だけ、刺激した区画（報酬なら KC→MBON07）だけ。
+LEARN_WHEN = ("always", "stimulus_only", "stimulated_compartment")
+
+
+def _dan_baseline(raw: Any, path: str, base: str) -> tuple[float, ...]:
+    """ドーパミン細胞の型ごとの基準（Hz）。報酬の細胞と嫌悪の細胞の両方を、0 以上の値で書く。
+
+    数値 1 つなら、両方に同じ値を使う（2026-10-14 より前に作った腕は 0 を 1 つ書いている）。
+    """
+    value = _get(raw, path)
+    cells = (_str(raw, f"{base}.reward_cells"), _str(raw, f"{base}.aversive_cells"))
+    if not isinstance(value, bool) and isinstance(value, (int, float)):
+        value = {cell: value for cell in cells}
+    if not isinstance(value, dict) or set(value) != set(cells):
+        raise ConfigError(f"agent.yaml の {path} は {' と '.join(cells)} の Hz を書いた対応表です: {value!r}")
+    out = []
+    for cell in cells:
+        number = value[cell]
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or number < 0:
+            raise ConfigError(f"agent.yaml の {path}.{cell} は 0 以上の数値です: {number!r}")
+        out.append(float(number))
+    return tuple(out)
 
 
 def _reward(raw: Any, simulation: SimulationSettings) -> RewardSettings:
@@ -410,7 +495,7 @@ def _reward(raw: Any, simulation: SimulationSettings) -> RewardSettings:
         memory_decay_sec=optional_positive(f"{rule}.memory_decay_sec"),
         min_fraction=_num(raw, f"{rule}.min_fraction"),
         max_fraction=_num(raw, f"{rule}.max_fraction"),
-        dan_baseline_hz=_num(raw, f"{rule}.dan_baseline_hz"),
+        dan_baseline_hz=_dan_baseline(raw, f"{rule}.dan_baseline_hz", base),
         learn_when=None if _get(raw, f"{rule}.learn_when") is None else _choice(raw, f"{rule}.learn_when", LEARN_WHEN),
         weight_snapshot_every_n=_int(raw, f"{base}.weight_snapshot_every_n"),
         memory_path=_str(raw, f"{base}.memory_path"),
@@ -773,6 +858,7 @@ def load(path: Path | str | None = None) -> Config:
         readout_gate=readout["gate"],
         readout_gate_min_spikes=readout["gate_min_spikes"],
         readout_record=readout["record"],
+        readout_mbon=readout["mbon"],
         vision_path=_str(raw, "memory.vision.path"),
         connectome_source=_str(raw, "fly.connectome.source"),
         connectome_download_base=_download_base(raw),

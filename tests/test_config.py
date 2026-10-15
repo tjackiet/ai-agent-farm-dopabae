@@ -196,7 +196,50 @@ class ConnectomeConfigTest(unittest.TestCase):
         self.assertEqual((cfg.readout_approach_threshold_hz, cfg.readout_avoid_threshold_hz), (2.0, -2.0))
         self.assertEqual(cfg.readout_gate, ("DNpe017",))
         self.assertEqual(cfg.readout_gate_min_spikes, 1)
-        self.assertEqual(cfg.readout_record, ("lLN1_bc",))
+        # MBON07・MBON11 は 2026-10-14 に足した（MBON の項の基準を腕ごとに実測するため。答えは変えない）
+        self.assertEqual(cfg.readout_record, ("lLN1_bc", "MBON07", "MBON11"))
+
+    def test_mbon_term_is_decided_but_off(self):
+        """2026-10-14 に人間が B2・w = 0.5 に決めた。基準は腕ごとに測るまで null で、入れない。"""
+        cfg = config_module.load()
+        self.assertIsNone(cfg.readout_mbon)
+        mbon = cfg.raw["fly"]["readout"]["mbon"]
+        self.assertEqual((mbon["enabled"], mbon["approach"], mbon["avoid"], mbon["weight"]), (False, "MBON11", "MBON07", 0.5))
+        self.assertIsNone(mbon["approach_baseline_hz"])
+        self.assertIsNone(mbon["avoid_baseline_hz"])
+
+    def mbon(self, **changes) -> dict:
+        raw = self.readout()
+        raw["fly"]["readout"]["mbon"].update(changes)
+        return raw
+
+    def test_mbon_term_needs_both_baselines(self):
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(self.mbon(enabled=True)))
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write(self.mbon(enabled=True, approach_baseline_hz=17.7)))
+        cfg = config_module.load(write(self.mbon(enabled=True, approach_baseline_hz=17.7, avoid_baseline_hz=1.14)))
+        self.assertEqual(cfg.readout_mbon, config_module.MbonTerm("MBON11", "MBON07", 0.5, 17.7, 1.14))
+
+    def test_mbon_term_is_b2(self):
+        """項 = w ×［(MBON11 − 基準) − (基準11 ÷ 基準07) × (MBON07 − 基準)］。基準どおりなら 0。"""
+        term = config_module.MbonTerm("MBON11", "MBON07", 0.5, 17.7, 1.14)
+        self.assertAlmostEqual(term.term_hz(17.7, 1.14), 0.0)
+        for m11, m07 in ((10.0, 1.14), (17.7, 0.0), (25.0, 3.0)):
+            expected = 0.5 * ((m11 - 17.7) - (17.7 / 1.14) * (m07 - 1.14))
+            self.assertAlmostEqual(term.term_hz(m11, m07), expected)
+
+    def test_arms_without_the_mbon_block_still_load(self):
+        """2026-10-14 より前に作った腕には fly.readout.mbon が無い。足さずに読む。"""
+        raw = self.readout()
+        del raw["fly"]["readout"]["mbon"]
+        self.assertIsNone(config_module.load(write(raw)).readout_mbon)
+
+    def test_rejects_bad_mbon_values(self):
+        for changes in ({"weight": 0}, {"weight": None}, {"approach_baseline_hz": 0}, {"avoid_baseline_hz": -1.0},
+                        {"approach": "MBON07"}, {"avoid": "MBON07:L"}, {"approach": ""}, {"enabled": "yes"}):
+            with self.assertRaises(config_module.ConfigError, msg=changes):
+                config_module.load(write(self.mbon(**changes)))
 
     def test_fly_source_needs_a_decided_readout(self):
         raw = self.readout(approach_neurons=None)
@@ -278,6 +321,16 @@ class RewardConfigTest(unittest.TestCase):
         self.assertFalse(cfg.reward.enabled)
         self.assertEqual(cfg.reward.compartments, (("PAM11", "MBON07"), ("PPL101", "MBON11")))
         self.assertEqual((cfg.reward.min_fraction, cfg.reward.max_fraction), (0.1, 2.0))
+        self.assertEqual(cfg.reward.dan_baseline_hz, (0.0, 77.0))
+        self.assertEqual(cfg.reward.learn_when, "stimulated_compartment")
+
+    def test_dan_baseline_needs_both_cells(self):
+        """型ごとに書く。数値 1 つなら両方に同じ値（前に作った腕が読めなくならないように）。"""
+        cfg = config_module.load(write(self.enabled(rule_dan_baseline_hz=0)))
+        self.assertEqual(cfg.reward.dan_baseline_hz, (0.0, 0.0))
+        for value in ({"PAM11": 0}, {"PAM11": 0, "PPL101": -1}, -5, "77", {"PAM11": 0, "PPL101": 77, "X": 1}):
+            with self.subTest(value=value), self.assertRaises(config_module.ConfigError):
+                config_module.load(write(self.enabled(rule_dan_baseline_hz=value)))
 
     def test_enabled_needs_threshold_and_decay(self):
         cfg = config_module.load(write(self.enabled()))

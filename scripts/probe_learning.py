@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             "axis_hz": obs["axis_hz"],
             "gate_spikes": obs["gate_spikes"],
             **{f"{k}_hz": v for k, v in obs["record_hz"].items()},
-            "plastic": learning["plastic"],
+            "learning_mbon": learning["learning_mbon"],
             "changed_edges": learning["changed_edges"],
             "by_mbon": learning["by_mbon"],
             "wall_sec": obs["wall_sec"],
