@@ -2,9 +2,15 @@
 """学習の場所（KC→MBON07 / MBON11）を変えたとき、読み出し（DNp20 の左右・DNpe017）が変わるかを測る。
 
 Phase 5 では、決済が確定した回の報酬・嫌悪で KC→MBON07 / MBON11 の重みを変える
-（Stonkfly と同じ場所。抑圧のみ）。ところが方向を決める読み出しは、右 DNp20 − 左 DNp20 と
-DNpe017 の関門である（`fly.readout`）。**学習の場所の変化が読み出しまで届かなければ、
-学習しても方向は変わらない。** Phase 5 の前に、それを確かめる。学習そのものは入れない。
+（Stonkfly と同じ場所・同じ規則。発火の順序で弱めも強めもし、元の 0.1〜2.0 倍に収める）。
+ところが方向を決める読み出しは、右 DNp20 − 左 DNp20 と DNpe017 の関門である（`fly.readout`）。
+**学習の場所の変化が読み出しまで届かなければ、学習しても方向は変わらない。** Phase 5 の前に、
+それを確かめる。学習そのものは入れない。
+
+最初の測定（2026-10-13）は「抑圧のみ」と誤解したまま条件を組んだ（`zero`・`half` はその名残）。
+その後 Stonkfly の規則が強めもすると分かり、区画ごとの端（`m07_low` など）を足した。
+学習の腕で読み出しに MBON の項を足すか（`fly.readout.mbon`）は、この測定を見て人間が決めた（B2）。
+ここでの読み出しは `fly.read` なので、渡した設定に MBON の項が入っていればそれも含む。
 **結論は書かない。数字だけを出す。**
 
 測りかた:
@@ -44,7 +50,7 @@ from dopabae.config import REPO_ROOT, load  # noqa: E402
 
 import probe_readout as probe  # noqa: E402  同じ scripts/ にある
 
-# 学習の場所（Stonkfly と同じ。agent.yaml の fly.reward.plasticity_edges）。
+# 学習の場所（Stonkfly と同じ。agent.yaml の fly.reward.reward_mbon / aversive_mbon）。
 PLASTIC_TYPES = ("MBON07", "MBON11")
 KC_PREFIX = "KC"
 MBON_PREFIX = "MBON"
@@ -56,7 +62,7 @@ CONDITIONS = {
     "tiny3": ("KC→MBON07/11 を ×0.998（網の揺らぎの目安）", {"scale": 0.998}),
     "tiny4": ("KC→MBON07/11 を ×1.002（網の揺らぎの目安）", {"scale": 1.002}),
     "half": ("KC→MBON07/11 を ×0.5", {"scale": 0.5}),
-    "zero": ("KC→MBON07/11 を ×0（抑圧のみの学習の行き着く先）", {"scale": 0.0}),
+    "zero": ("KC→MBON07/11 を ×0（学習の下限 0.1 倍より下。学習ではここまで下がらない）", {"scale": 0.0}),
     "all_zero": ("KC→すべての MBON を ×0（キノコ体の出力の上限）", {"scale": 0.0, "all_mbon": True}),
     "drive": ("MBON07/11 に +20 mV の一定電流（届くかの陽性対照）", {"current_mv": 20.0}),
     "silence": ("MBON07/11 に −500 mV の一定電流（出力を止める）", {"current_mv": -500.0}),
