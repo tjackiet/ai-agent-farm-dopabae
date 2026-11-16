@@ -431,6 +431,26 @@ narrate:
   max_tokens: 500 # writer=api のときだけ使う
   targets:
     daily: true # 日誌の本文
+    report: true # 通知の振り返りに添える一言（1 日 report_at の回数だけ claude を呼ぶ）
+
+# 動きがあったときの通知（Discord）。scripts/run_arms.py が、全部の腕を回し終えたあとに
+# 1 通にまとめて送る（dopabae/notify.py）。**通知は判断に影響させない。**
+# この節はリポジトリ直下の agent.yaml からだけ読む。腕の設定（arms/*.yaml）からは読まない。
+notify:
+  enabled: true
+  # Webhook の URL を入れる環境変数の名前。URL そのものはここにも判断ログにも書かない。
+  # launchd では plist の EnvironmentVariables に書く（scripts/launchd/local.dopabae.plist）。
+  # 未設定なら送らない（run_arms の要約に「設定されていないため通知しません」と出る）。
+  webhook_env: DOPABAE_DISCORD_WEBHOOK_URL
+  timeout_sec: 10
+  events: # キーに on を使わない（YAML では真偽値として読まれる）
+    fill: true # 腕の paper tick が返した約定
+    error: true # 腕の回が続けて失敗したとき
+  # 発注・取消は送らない。檻は方向が続くあいだ毎回指値を置き直すので、15 分ごとに何本ぶんも出てしまう。
+  error_streak: 3 # この回数続けて失敗したら送る
+  streak_repeat_every: 24 # そのあとは、この回数ごとにだけ送る（15 分ごとなら 6 時間ごと）
+  report_at: ["09:00", "21:00"] # 振り返りを送る時刻。またいだ最初の回で送る
+  state_path: var/notify_last.yaml # 前回の時刻と失敗の数（Git 管理外。判断には使わない）
 
 memory:
   root: var/memory/

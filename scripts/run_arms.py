@@ -22,20 +22,30 @@
 
 **終了コードは常に 0。** 腕が1つ落ちても定期実行そのものは失敗ではない。
 落ちたことは標準出力の要約と各腕の `run.err.log` に残る。
+
+全部の腕を回し終えたら、通知（Discord）を 1 通にまとめて送る（`dopabae/notify.py`）。
+腕の発注と記録が済んでから送るので、**通知は判断に影響しない。** 送れなかった理由は
+要約の `notify` に出す（URL は出さない）。Webhook の環境変数は、腕のプロセスには渡さない。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from dopabae import config as config_module, notify as notify_module  # noqa: E402
+
 ARMS_DIR = REPO_ROOT / "arms"
 # 15分間隔に対する既定の上限。これを超えた腕は打ち切る。打ち切られた腕は
 # プロセスが死ぬのでロックも外れ、次の回はやり直せる。
@@ -51,6 +61,13 @@ class Result:
     seconds: float
     action: str | None = None
     detail: str | None = None
+    # 通知のための、この回の約定（`paper tick` の観測値）と失敗の理由。要約には出さない。
+    fills: tuple[dict, ...] = ()
+    error: str | None = None
+
+    def to_round(self) -> notify_module.ArmRound:
+        failure = self.error if self.status == "ok" else (self.detail or self.status)
+        return notify_module.ArmRound(name=self.name, status=self.status, fills=self.fills, error=failure)
 
     def as_dict(self) -> dict:
         return {
@@ -96,7 +113,26 @@ def summarize(line: str) -> tuple[str, str | None, str | None]:
     return "ok", (str(action) if action else None), (str(detail)[:200] if detail else None)
 
 
-def run_one(config_path: Path, timeout_sec: int, python: str) -> Result:
+def round_fields(line: str) -> tuple[tuple[dict, ...], str | None]:
+    """`dopabae.run` の1行 JSON から、通知に使う約定と失敗の理由を読む。読めなければ空。"""
+    try:
+        payload = json.loads(line)
+    except (json.JSONDecodeError, TypeError):
+        return (), None
+    if not isinstance(payload, dict):
+        return (), None
+    fills = payload.get("fills")
+    rows = tuple(row for row in fills if isinstance(row, dict)) if isinstance(fills, list) else ()
+    error = payload.get("error")
+    return rows, (str(error)[:200] if error else None)
+
+
+def child_env(environ: Mapping[str, str], hidden: tuple[str, ...]) -> dict[str, str]:
+    """腕のプロセスに渡す環境。通知の Webhook は腕に要らないので外す（bitbank や claude から見えなくする）。"""
+    return {key: value for key, value in environ.items() if key not in hidden}
+
+
+def run_one(config_path: Path, timeout_sec: int, python: str, env: Mapping[str, str] | None = None) -> Result:
     """腕を1つ回す。落ちても例外を投げない。定期実行を止めないため。"""
     name = config_path.stem
     started = time.monotonic()
@@ -105,7 +141,8 @@ def run_one(config_path: Path, timeout_sec: int, python: str) -> Result:
     argv = [python, "-m", "dopabae.run", "--config", str(config_path)]
     try:
         proc = subprocess.run(  # noqa: S603 - 引数は自前で組み立てている
-            argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout_sec, check=False
+            argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout_sec, check=False,
+            env=dict(env) if env is not None else None,
         )
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - started
@@ -129,7 +166,26 @@ def run_one(config_path: Path, timeout_sec: int, python: str) -> Result:
     if not last:
         return Result(name, "failed", elapsed, detail="出力が空です")
     status, action, detail = summarize(last[-1])
-    return Result(name, status, elapsed, action=action, detail=detail)
+    fills, error = round_fields(last[-1]) if status == "ok" else ((), None)
+    return Result(name, status, elapsed, action=action, detail=detail, fills=fills, error=error)
+
+
+def webhook_names() -> tuple[str, ...]:
+    """腕に渡さない環境変数の名前。設定が読めなければ何も外さない（通知もしない）。"""
+    try:
+        return (notify_module.load_settings(config_module.load().raw).webhook_env,)
+    except config_module.ConfigError:
+        return ()
+
+
+def notify_after(targets: list[Path], results: list[Result]) -> str | None:
+    """通知を送る。何が起きても例外を外へ出さない（定期実行を止めない）。"""
+    try:
+        return notify_module.after_round(
+            [(path.stem, path) for path in targets], [r.to_round() for r in results]
+        )
+    except Exception as exc:  # noqa: BLE001 - 通知の失敗で要約を出せなくなるのを防ぐ
+        return f"通知で予期しない失敗がありました: {type(exc).__name__}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -147,12 +203,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": f"設定が見つかりません: {[str(p) for p in missing]}"}, ensure_ascii=False))
         return 1
 
+    env = child_env(os.environ, webhook_names())
     # 同じ相場を見せるため、順番ではなく並行して起動する。
     with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
-        results = list(pool.map(lambda p: run_one(p, args.timeout_sec, args.python), targets))
+        results = list(pool.map(lambda p: run_one(p, args.timeout_sec, args.python, env), targets))
 
+    notice = notify_after(targets, results)
     print(json.dumps(
-        {"at": time.strftime("%FT%T%z"), "arms": [r.as_dict() for r in results]},
+        {"at": time.strftime("%FT%T%z"), "arms": [r.as_dict() for r in results], "notify": notice},
         ensure_ascii=False,
     ))
     # 腕が落ちても定期実行そのものは失敗ではない。

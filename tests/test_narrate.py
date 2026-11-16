@@ -135,3 +135,53 @@ class ModelGuardTest(unittest.TestCase):
                 yaml.safe_dump(bad, tmp, allow_unicode=True)
             with self.assertRaises(config_module.ConfigError):
                 config_module.load(tmp.name)
+
+
+class ReportCommentTest(unittest.TestCase):
+    """通知の振り返りに添える一言。日誌と同じく、ハエが知らないことは言わせない。"""
+
+    def setUp(self):
+        self.cfg = helpers.load_config()
+
+    def test_prompt_keeps_the_same_rules_and_limits_lines(self):
+        prompt = narrate.build_report_prompt()
+        self.assertIn("ハエの語彙", prompt)
+        self.assertIn("数字を書かない", prompt)
+        self.assertIn(f"{narrate.REPORT_MAX_LINES}行以内", prompt)
+
+    def test_accepted_remark_is_cut_to_two_lines(self):
+        remark = narrate.comment_report(self.cfg, lambda s, u: "- 近づいた。\n- ブン。\n- ドパまだ。", "様子")
+        self.assertEqual(remark, "近づいた。\nブン。")
+
+    def test_unacceptable_or_disabled_gives_empty(self):
+        self.assertEqual(narrate.comment_report(self.cfg, lambda s, u: "3回買った。", "様子"), "")
+        off = dataclasses.replace(self.cfg, narrate_targets={**self.cfg.narrate_targets, "report": False})
+        self.assertEqual(narrate.comment_report(off, lambda s, u: "近づいた。", "様子"), "")
+
+    def test_login_expiry_is_recognized(self):
+        self.assertTrue(narrate.needs_login("Failed to authenticate: OAuth session expired"))
+        self.assertTrue(narrate.needs_login("Login expired · Please run /login"))
+        self.assertFalse(narrate.needs_login("timeout"))
+        self.assertFalse(narrate.needs_login(None))
+
+
+class HiddenEnvTest(unittest.TestCase):
+    def test_claude_does_not_see_hidden_variables(self):
+        """通知の Webhook は、一言を書く claude に渡さない。"""
+        from unittest import mock
+        import subprocess
+
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(argv, 0, stdout="近づいた。", stderr="")
+
+        settings = narrate.settings_of(helpers.load_config())
+        with mock.patch.dict("os.environ", {"DOPABAE_DISCORD_WEBHOOK_URL": "https://example.invalid/x"}), \
+                mock.patch.object(narrate.subprocess, "run", fake_run):
+            hidden = narrate.claude_code_writer(settings, ("DOPABAE_DISCORD_WEBHOOK_URL",))
+            self.assertEqual(hidden("指示", "本文"), "近づいた。")
+            self.assertNotIn("DOPABAE_DISCORD_WEBHOOK_URL", seen["env"])
+            narrate.claude_code_writer(settings)("指示", "本文")
+            self.assertIsNone(seen["env"])  # 何も隠さないときは、これまでどおり環境を受け継ぐ
