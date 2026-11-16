@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -67,6 +68,43 @@ def build_prompt(root: Path | None = None) -> str:
     )
 
 
+REPORT_MAX_LINES = 2
+
+
+def build_report_prompt(root: Path | None = None) -> str:
+    """振り返りの一言を書かせる指示。日誌と同じ性格設定・同じ守ることに、行数だけ足す。"""
+    return (
+        "あなたはペーパートレードを行うエージェント「ドパバエ」です。\n"
+        "ショウジョウバエの脳を模したシミュレーションで、見えるのは光の模様だけです。\n"
+        "同じ脳の模型を、入力の条件だけ変えて何匹か並べています。渡すのは、その何匹かの半日の様子です。\n"
+        "以下の性格設定に従って、半日ごとの振り返りに添える一言を書いてください。\n\n"
+        f"{STYLE_RULES}\n- **{REPORT_MAX_LINES}行以内。** 何匹かをまとめて、一言で言う\n\n"
+        f"--- 性格設定 ---\n{_personality(root)}"
+    )
+
+
+def comment_report(config: Config, writer: Writer, facts: str, root: Path | None = None) -> str:
+    """振り返りの一言。書けなかった・通せなかったときは空文字（振り返りは一言なしで送る）。
+
+    書き手の失敗（NarrateError など）はそのまま投げる。受け取る側が警告に残す。
+    """
+    if not config.narrate_enabled or not config.narrate_targets.get("report"):
+        return ""
+    written = _clean(writer(build_report_prompt(root), facts))
+    written = "\n".join(written.splitlines()[:REPORT_MAX_LINES])
+    return written if is_acceptable(written) else ""
+
+
+# claude がログインし直しを求めるときの文面（ナンピノニクスで 2026-10-12 に出た形と、ドキュメントにある形）。
+_LOGIN_REQUIRED = re.compile(r"Failed to authenticate|Please run /login|OAuth", re.I)
+LOGIN_HINT = "ターミナルで claude を起動し、/login でログインし直してください"
+
+
+def needs_login(error: object) -> bool:
+    """失敗の理由が、claude のログイン切れを示しているか。"""
+    return isinstance(error, str) and _LOGIN_REQUIRED.search(error) is not None
+
+
 def settings_of(config: Config) -> LlmSettings:
     return LlmSettings(
         writer=config.narrate_writer,
@@ -79,12 +117,14 @@ def settings_of(config: Config) -> LlmSettings:
     )
 
 
-def claude_code_writer(settings: LlmSettings) -> Writer:
+def claude_code_writer(settings: LlmSettings, hidden_env: tuple[str, ...] = ()) -> Writer:
     """Claude Code CLI を非対話で呼ぶ。
 
     引かれ先は「headless かどうか」ではなく「何で認証されているか」で決まる。
     Claude Code のログイン（サブスクリプション）ならプランの利用枠から、
     環境に ANTHROPIC_API_KEY があればそちらが優先されて API クレジットから引かれる。
+
+    `hidden_env` の環境変数は claude に渡さない（通知の Webhook など、書き手に要らない秘密）。
     """
 
     def write(system: str, user: str) -> str:
@@ -101,9 +141,10 @@ def claude_code_writer(settings: LlmSettings) -> Writer:
             argv.insert(1, "--bare")
         try:
             with tempfile.TemporaryDirectory(prefix="dopabae-narrate-") as work:
+                env = {k: v for k, v in os.environ.items() if k not in hidden_env} if hidden_env else None
                 proc = subprocess.run(  # noqa: S603 - 引数は自前で組み立てている
                     argv, input=user, capture_output=True, text=True,
-                    timeout=settings.timeout_sec, check=False, cwd=work,
+                    timeout=settings.timeout_sec, check=False, cwd=work, env=env,
                 )
         except FileNotFoundError as exc:
             raise NarrateError(f"{settings.command} が見つかりません。PATH を確認する") from exc
@@ -140,16 +181,16 @@ def anthropic_writer(settings: LlmSettings) -> Writer:
     return write
 
 
-def build_writer(settings: LlmSettings) -> Writer:
+def build_writer(settings: LlmSettings, hidden_env: tuple[str, ...] = ()) -> Writer:
     if settings.writer == "api":
         return anthropic_writer(settings)
     if settings.writer == "claude_code":
-        return claude_code_writer(settings)
+        return claude_code_writer(settings, hidden_env)
     raise ValueError(f"writer が不正です: {settings.writer}")
 
 
-def writer_for(config: Config) -> Writer:
-    return build_writer(settings_of(config))
+def writer_for(config: Config, hidden_env: tuple[str, ...] = ()) -> Writer:
+    return build_writer(settings_of(config), hidden_env)
 
 
 # 書かせてはならない語。数字と、ハエが持たない語彙。

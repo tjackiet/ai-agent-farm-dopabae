@@ -87,6 +87,7 @@ def build_record(
     warnings: Sequence[str] = (),
     error: str | None = None,
     reinforcement: dict | None = None,
+    fills: Sequence[dict] = (),
 ) -> dict:
     return {
         "run_id": run_id,
@@ -109,6 +110,9 @@ def build_record(
         "action": action,
         "reason": reason,
         "orders": list(orders),
+        # この回の `paper tick` が返した約定（観測値。前回の tick 以降のぶん）。
+        # 2026-11-16 より前の記録には無い。無い回の約定は分からないので、数えない。
+        "fills": list(fills),
         "sources": [s.as_dict() for s in sources],
         "warnings": list(warnings),
         "error": error,

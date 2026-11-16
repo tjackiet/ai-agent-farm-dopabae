@@ -11,7 +11,7 @@ from pathlib import Path
 import yaml
 
 from dopabae import cli
-from dopabae.direction import AVOID, Direction
+from dopabae.direction import AVOID, NONE, Direction
 from dopabae.run import run_once
 from tests import helpers
 from tests.helpers import FakeCli, default_responses, load_config
@@ -74,6 +74,20 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(len(seen["frames"]), 1)
         record = self.journal()[-1]
         self.assertEqual(record["vision"]["sha256"], seen["frames"][-1].sha256)
+
+    def test_fills_from_tick_are_recorded_and_output(self):
+        """`paper tick` が返した約定を、判断ログと標準出力にそのまま残す（通知が読む）。"""
+        responses = default_responses()
+        filled = {"id": "f1", "side": "buy", "fillPrice": 14699000, "amount": 0.0068}
+        responses["paper tick"] = {**responses["paper tick"], "filled": [filled, "壊れた行"]}
+        cycle = self.run_cycle(FakeCli(responses), resolver=lambda cfg, key, frames=None: Direction(source="test", value=NONE))
+        self.assertEqual(self.journal()[-1]["fills"], [filled])
+        self.assertEqual(cycle.as_dict()["fills"], [filled])
+
+    def test_no_fill_is_an_empty_list(self):
+        cycle = self.run_cycle(FakeCli(default_responses()), resolver=lambda cfg, key, frames=None: Direction(source="test", value=NONE))
+        self.assertEqual(self.journal()[-1]["fills"], [])
+        self.assertEqual(cycle.fills, [])
 
     def learning_config(self):
         cfg = dataclasses.replace(self.config, direction_source="fly")

@@ -103,6 +103,7 @@ Phase 1〜3（檻と方向インタフェース、画像の描画と光受容細
 | `memory-policy.md`            | 記憶の構造と書き込みルール                                   |
 | `dopabae/evaluate.py` / `breakdown.py` | 腕を並べて比べる（`evaluate`）。成績の差の内訳を出す（`breakdown`）。読み取りのみ |
 | `dopabae/summary.py` / `narrate.py` | 日次サマリと記録の言語化。売買の判断には関与しない      |
+| `dopabae/notify.py`           | 動きの通知（Discord）。`scripts/run_arms.py` が全部の腕を回し終えたあと 1 通にまとめて送る。判断には関与しない |
 | `status.yaml`                 | 状態のスキーマの見本。実行では書き換えない                   |
 | `dopabae/`                    | エージェント本体。観測・画像・マッピング・方向・檻・発注・記録（Phase 1〜2） |
 | `scripts/make_arm.py`         | 評価の腕の設定を作る。発注はしない                           |
@@ -279,6 +280,34 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.dopabae.plist   # 
 （`skipped` として要約に出ます）。実行しないことによる機会損失は許容し、二重発注は許容しません。
 
 各回の要約は `var/arms.log`、腕ごとの詳細は `var/arms/<腕>/run.log` に残ります。
+
+### 通知する（Discord）
+
+全部の腕を回し終えたら、`scripts/run_arms.py` が Discord へ 1 通にまとめて送ります（`dopabae/notify.py`）。
+腕の発注と記録が済んでから送るので、**通知は判断に影響しません。** 送れなくても運用は続きます。
+
+| きっかけ | 中身 |
+| --- | --- |
+| 約定 | `[腕] 約定 買い 価格 × 数量`。腕の `paper tick` が返した約定（観測値） |
+| 失敗の連続 | 腕の回が 3 回続けて失敗したとき。その後は 24 回（6 時間）ごと |
+| 振り返り | 09:00 と 21:00 をまたいだ最初の回。腕ごとに 1 行（総資産・24 時間・最高からの下落・約定・建玉・方向）と、ドパバエの一言 |
+
+発注・取消は送りません。檻は方向が続くあいだ毎回指値を置き直すので、15 分ごとに何本ぶんも出てしまうためです。
+値は `agent.yaml` の `notify` にあります（リポジトリ直下の `agent.yaml` からだけ読み、腕の設定からは読みません）。
+
+Webhook の URL は環境変数 `DOPABAE_DISCORD_WEBHOOK_URL` からだけ読みます。リポジトリにも判断ログにも書きません。
+launchd はシェルの `export` を引き継がないので、`~/Library/LaunchAgents/local.dopabae.plist` の
+`EnvironmentVariables` に書きます（雛形のコメントを外す）。値を入れた plist はリポジトリへ戻さないでください。
+
+```bash
+launchctl bootout gui/$(id -u)/local.dopabae
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.dopabae.plist
+launchctl print gui/$(id -u)/local.dopabae | grep -c DOPABAE_DISCORD_WEBHOOK_URL   # 1 以上なら渡っている（値は出ない）
+```
+
+Webhook は腕のプロセスには渡しません（`bitbank` や `claude` からは見えません）。
+送れなかった理由は `var/arms.log` の各回の要約の `notify` に出ます（URL は出ません）。
+未設定のあいだは、送るものがある回に「設定されていないため通知しません」と出るだけです。
 
 ## 未確認の前提
 

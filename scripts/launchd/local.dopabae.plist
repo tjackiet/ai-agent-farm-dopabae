@@ -39,6 +39,18 @@
   <dict>
     <key>PATH</key>
     <string>__PATH__</string>
+    <!--
+      Discord 通知の Webhook（dopabae/notify.py）。使うときだけコメントを外して URL を入れる。
+      launchd はシェルの export を引き継がないので、ここに書く必要がある。
+      値を入れた plist は ~/Library/LaunchAgents にだけ置き、リポジトリへ戻さない。
+      変数名は agent.yaml の notify.webhook_env と同じにする。腕のプロセスには渡さない（scripts/run_arms.py）。
+      渡っているかは、値を出さずに数で確かめる:
+        launchctl print gui/$(id -u)/local.dopabae | grep -c DOPABAE_DISCORD_WEBHOOK_URL
+    -->
+    <!--
+    <key>DOPABAE_DISCORD_WEBHOOK_URL</key>
+    <string>https://discord.com/api/webhooks/...</string>
+    -->
   </dict>
 
   <!-- 15分ごと。スリープ中は動かず、復帰後に一度だけ実行される。 -->

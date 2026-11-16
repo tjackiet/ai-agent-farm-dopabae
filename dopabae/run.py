@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -45,6 +45,8 @@ class Cycle:
     error: str | None = None
     status_written: bool = False
     reinforcement: dict | None = None
+    # この回の `paper tick` が返した約定（観測値）。scripts/run_arms.py の通知が読む。
+    fills: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -62,12 +64,23 @@ class Cycle:
             "error": self.error,
             "reinforcement": self.reinforcement,
             "status_written": self.status_written,
+            "fills": self.fills,
         }
 
 
-def _observe_account(client: cli.Client, cfg: config_module.Config, now: datetime, last_price, spec):
-    """ペーパー口座を観測して状態を導出する。"""
-    client.paper_tick()
+def _observe_account(
+    client: cli.Client, cfg: config_module.Config, now: datetime, last_price, spec, fills: list[dict]
+):
+    """ペーパー口座を観測して状態を導出する。
+
+    `paper tick` が返す `filled` は「前回の tick からこの回までに約定したもの」で、
+    一度返したものは二度と返らない。判断ログと通知に残すため、tick の直後に `fills` へ
+    そのまま足す（観測値）。あとの観測で失敗しても、約定の記録は失わない。
+    """
+    tick = client.paper_tick().data
+    filled = tick.get("filled") if isinstance(tick, dict) else None
+    if isinstance(filled, list):
+        fills.extend(row for row in filled if isinstance(row, dict))
     assets = client.paper_assets().data
     pnl = client.paper_pnl(cfg.pair).data
     orders = client.paper_active_orders().data
@@ -164,6 +177,7 @@ def run_once(
     spec = None
     derived = None
     trades: tuple[state_module.Trade, ...] = ()
+    fills: list[dict] = []
     error: str | None = None
     stopped_hours: float | None = None
     image: vision_module.Image | None = None
@@ -176,7 +190,7 @@ def run_once(
         image = frames[-1] if frames else None
         # ペーパー口座に触る前に測る。tick も lazy tick も lastTickAt を進めるため。
         stopped_hours = state_module.stopped_hours(cfg, now, repo_root)
-        derived, trades = _observe_account(client, cfg, now, market.last, spec)
+        derived, trades = _observe_account(client, cfg, now, market.last, spec, fills)
     except cli.CliError as exc:
         error = f"{exc}（{exc.cmd}）"
     except (ValueError, KeyError, TypeError) as exc:
@@ -259,7 +273,8 @@ def run_once(
     # 実際に注文を出した回は、スナップショットを取り直す。
     if error is None and not dry_run and order_records:
         try:
-            derived, trades = _observe_account(client, cfg, now, market.last, spec)
+            # 発注後の tick で約定したぶんも、ここで拾わないと二度と返らない。
+            derived, trades = _observe_account(client, cfg, now, market.last, spec, fills)
         except (cli.CliError, ValueError, KeyError, TypeError) as exc:
             error = f"発注後の観測に失敗した: {exc}"
 
@@ -293,6 +308,7 @@ def run_once(
         warnings=client.warnings,
         error=error,
         reinforcement=reinforcement.as_dict() if reinforcement is not None else None,
+        fills=fills,
     )
     journal.append(cfg, now, record, root=repo_root)
 
@@ -345,6 +361,7 @@ def run_once(
         error=error,
         status_written=status_written,
         reinforcement=reinforcement.as_dict() if reinforcement is not None else None,
+        fills=list(fills),
     )
 
 
