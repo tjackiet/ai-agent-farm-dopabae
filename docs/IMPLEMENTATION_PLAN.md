@@ -42,7 +42,7 @@
 | 16  | `dopabae/retina.py` / `scripts/check_column_map.py` | 画像から光受容細胞への入力（Phase 2 後半）。R1–R6 に輝度、R8 に青／緑の代理値を渡す。座標表は Git 管理外 |
 | 17  | `scripts/fetch_connectome.py` / `scripts/export_column_map.py` | 配線図データの取得（指紋つき）と、光受容細胞の座標表の書き出し。データと表は Git 管理外 |
 | 18  | `dopabae/connectome.py` / `dopabae/lif.py` / `scripts/bench_simulation.py` | 配線図から網を作り（キャッシュつき）、LIF で動かす（Phase 3 の中核。Stonkfly に合わせてある）。計算時間とメモリの計測 |
-| 13  | `dopabae/performance.py` / `evaluate.py` / `scripts/make_arm.py` | 評価基盤（Phase 4 の土台）。腕を並べて比べる |
+| 13  | `dopabae/performance.py` / `evaluate.py` / `breakdown.py` / `scripts/make_arm.py` | 評価基盤（Phase 4 の土台）。腕を並べて比べる。成績の差の内訳を出す |
 | 14  | `dopabae/lock.py` / `scripts/run_arms.py` / `scripts/launchd/` / `scripts/systemd/` | 定期実行。腕を並行して回し、同じ腕の二重起動を防ぐ |
 | 15  | `dopabae/summary.py` / `narrate.py`                            | 日次サマリと記録の言語化。判断には関与しない |
 | 19  | `dopabae/fly.py`                                               | ハエ版の方向の出どころ（Phase 3）。画像の枚を見せて網を動かし、`fly.readout` の規則で方向を決める。発火の観測値を判断ログに残す |
@@ -72,6 +72,7 @@
 | `retina.py`    | 画像から光受容細胞への入力。座標表を読み、範囲の平均から輝度と青／緑を採る | 新規 |
 | `performance.py` | 成績の物差し。総資産は判断ログの**観測値**から取り、復元しない        | 書き直し |
 | `evaluate.py`  | 腕を並べて比べる。方向の頻度と偏り、檻の扱い、方向のあとの値動き、成績 | 新規 |
+| `breakdown.py` | 成績の内訳。建玉の重さと損益の内訳、方向の手前の値動き（循環ずらし検定）、方向の続きかた | 新規 |
 | `lock.py`      | 同じ腕の二重起動を防ぐ（`flock`）。重なった回は何もしない            | 新規 |
 | `summary.py`   | 日次サマリ。ハエの言葉の欄は空欄で作り、数字は別の節へ転記する      | 書き直し |
 | `narrate.py`   | 空欄をドパバエの言葉で埋める。**売買の判断には関与しない**          | 書き直し |
@@ -1234,6 +1235,34 @@ date '+%Y-%m-%dT%H:%M' > var/phase4-start-1016.txt
   `random-fly` は NONE
 - **比べる期間は Mac の `var/phase4-start-1016.txt` の時刻（手で 1 回目を回した直後）から。** 6 本がそろうのは次の定期実行から
 - 関門なしの腕に合わせたランダムの腕と、MBON の項（B2）の基準は、数日分の記録がたまってから
+
+#### 成績の内訳を出す（2026-11-16）
+
+10/16〜11/16 の `evaluate.py` で、方向の頻度がほぼ同じ `fly-hs1` と `random-fly-hs1` の成績が大きく違った。
+方向のあとの値動きでは、どちらもランダムと区別できていない。差の出どころを見るために
+`dopabae/breakdown.py` を足した。読み取りのみで、結論は書かない。
+
+```bash
+.venv/bin/python -m dopabae.breakdown --since "$(cat var/phase4-start-1016.txt)+09:00" \
+  --config arms/fly.yaml --config arms/random-fly.yaml --config arms/fly-hs1.yaml \
+  --config arms/random-fly-hs1.yaml --config arms/fly-hs1-nogate.yaml --config arms/cage-only.yaml \
+  --out records/phase4/<日付>-breakdown.json
+```
+
+| 出すもの | 見ること |
+| --- | --- |
+| `holdings` | 期首と期末の建玉、建玉の重さ（総資産に占める BTC の割合）の平均と日ごとの推移、損益の内訳（`market_jpy` 持っていたことによる分・`trading_jpy` 約定による分）、重さの平均で決まる分（`level_pct`）と時機の分（`timing_pct`） |
+| `reaction` | 方向の手前の値動き（最後の 1 本と、画像に写る範囲）。APPROACH と AVOID で違うか |
+| `persistence` | 同じ答えが続く割合と、前の回と無関係に出たときの期待値 |
+
+- `var/phase4-start-1016.txt` はタイムゾーンのない時刻なので、`+09:00` を付けて渡す
+- **ふつうの並べ替え検定は、同じ答えが続く腕では p 値が小さく出すぎる。** 隣どうしの区間が重なった値動きは似ており、
+  答えが続くと同じ値動きを何度も数えるため。値動きと無関係な答えの合成データ（2,000 観測・手前 8 本）で、
+  答えが 7 割の確率で続くと、p < 0.05 になったのが 60 回中 17 回（28%）だった。`breakdown.py` の `reaction` は
+  答えの並びを丸ごとずらす循環ずらし検定（`p_value_shift`）で見る。同じ合成データで p < 0.05 になる割合は 5% 前後
+  （続きやすさ 0 / 0.7 / 0.9 で 5.0% / 6.2% / 3.7%、各 80 回）に収まり、手前の下げに反応する答えは 80 回とも見つけた
+- `evaluate.py` の `forward_returns`（方向のあと 60 分）の p 値も同じ並べ替え検定なので、答えが続く腕では小さく出すぎうる。
+  10/16〜11/16 の評価では有意な腕が無かったので、読み違いにはなっていない
 
 ### Phase 5：可塑性と報酬
 
