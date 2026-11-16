@@ -15,9 +15,12 @@
 - 建玉の重さは、判断ログの `account.equity_jpy` と `account.cash_jpy`（どちらも `paper assets` 由来）から
   `(総資産 − 現金) / 総資産` で出す。総資産は「現金 + BTC 残高 × 最終価格」で記録されているので、
   BTC 残高は `(総資産 − 現金) / 価格` で読み戻せる。現金と建玉を推定で積み直すことはしない
-- 損益の内訳は、続けて記録された 2 回の両方で値がそろっている区間だけで分ける。
-  間に観測の欠けた回があると、その回に約定したかが分からないので、その区間の増減は
-  `unattributed_jpy` に入れ、分けない
+- 損益の内訳は、値がそろった回から次にそろった回までの区間ごとに分ける。
+  ペーパー口座はローカルの状態ファイルで、`bitbank paper` のコマンドを走らせたときにしか変わらない。
+  間に観測の欠けた回があっても、その回が paper のコマンドを 1 つも走らせていなければ
+  （判断ログの `sources` と `error` で確かめる）、建玉は区間の始めのまま変わっていないので分ける。
+  走らせていた回・確かめられない回をまたぐ区間は、約定したかが分からないので `unattributed_jpy` に入れ、分けない
+- 定期実行が止まっていた間（記録の無い空白）と、観測の欠けた回をまたぐ区間は `gaps` に一覧で出す
 - 方向の手前の値動きは、ハエに見せた画像そのものではなく、判断ログの価格（ticker の最終価格）で測る
 
 **結論は書かない。** 数字を出すだけで、読むのは人間。
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import sys
 from dataclasses import dataclass
@@ -51,6 +55,10 @@ CANDLE_MINUTES = {
 }
 # 建玉の重さがこれ未満の回を「ほぼ持っていない」として数える（売れない端数を持ち続ける腕があるため）。
 NEARLY_FLAT_EXPOSURE = 0.01
+# 定期実行の間隔（分）の既定。空白の判定と、本来の回数の見積もりに使う（scripts/launchd・systemd は 15 分）。
+DEFAULT_INTERVAL_MINUTES = 15
+# 記録の数が本来の回数のこの割合を下回ったら、notes に出す。
+LOW_COVERAGE_RATIO = 0.9
 
 
 def _number(value: object) -> float | None:
@@ -72,6 +80,8 @@ class Snapshot:
     equity_jpy: float | None
     cash_jpy: float | None
     direction: str | None
+    # その回に paper のコマンドを走らせたか。判断ログから確かめられなければ None。
+    touched_account: bool | None = None
 
     @property
     def complete(self) -> bool:
@@ -98,6 +108,24 @@ class Snapshot:
         return self.btc_value_jpy / self.price
 
 
+def _mentions_paper(text: str) -> bool:
+    return "paper" in re.split(r"[\s（）()]+", text)
+
+
+def touched_account(record: dict) -> bool | None:
+    """その回に `bitbank paper` のコマンドを走らせたか。
+
+    成功したコマンドは `sources` に、失敗したコマンドは `error` の末尾（`…（<コマンド>）`）に残る。
+    どちらかに paper のコマンドがあれば True。`sources` が無い・読めない回は確かめられないので None。
+    """
+    sources = record.get("sources")
+    if not isinstance(sources, list):
+        return None
+    texts = [s.get("cmd") for s in sources if isinstance(s, dict)]
+    texts.append(record.get("error"))
+    return any(_mentions_paper(t) for t in texts if isinstance(t, str))
+
+
 def snapshots(records: Sequence[dict], tz_name: str) -> list[Snapshot]:
     """判断ログの各回を、観測時刻の順に並べる。run_id が読めない回だけは落とす。"""
     result: list[Snapshot] = []
@@ -120,9 +148,65 @@ def snapshots(records: Sequence[dict], tz_name: str) -> list[Snapshot]:
                 equity_jpy=_number(account.get("equity_jpy")),
                 cash_jpy=_number(account.get("cash_jpy")),
                 direction=value if value in DIRECTIONS else None,
+                touched_account=touched_account(record),
             )
         )
     return sorted(result, key=lambda s: s.at)
+
+
+@dataclass(frozen=True)
+class Interval:
+    """値がそろった回から、次にそろった回まで。`skipped` は間に挟まった観測の欠けた回。"""
+
+    start: Snapshot
+    end: Snapshot
+    skipped: tuple[Snapshot, ...]
+
+    @property
+    def minutes(self) -> float:
+        return (self.end.at - self.start.at).total_seconds() / 60
+
+    @property
+    def attributable(self) -> bool:
+        """区間のあいだ建玉が始めのままだったと言えるか。挟まった回がどれも paper に触っていなければ言える。"""
+        return all(s.touched_account is False for s in self.skipped)
+
+    @property
+    def account_touched(self) -> bool | None:
+        """挟まった回のどれかが paper に触ったか。触った回があれば True、確かめられない回があれば None。"""
+        flags = [s.touched_account for s in self.skipped]
+        if any(f is True for f in flags):
+            return True
+        if any(f is None for f in flags):
+            return None
+        return False
+
+    @property
+    def market_jpy(self) -> float:
+        return self.start.btc_amount * (self.end.price - self.start.price)
+
+    @property
+    def equity_change_jpy(self) -> float:
+        return self.end.equity_jpy - self.start.equity_jpy
+
+    @property
+    def price_return(self) -> float:
+        return (self.end.price - self.start.price) / self.start.price
+
+
+def intervals(snaps: Sequence[Snapshot]) -> list[Interval]:
+    result: list[Interval] = []
+    start: Snapshot | None = None
+    skipped: list[Snapshot] = []
+    for s in snaps:
+        if not s.complete:
+            if start is not None:
+                skipped.append(s)
+            continue
+        if start is not None:
+            result.append(Interval(start=start, end=s, skipped=tuple(skipped)))
+        start, skipped = s, []
+    return result
 
 
 def _point(snapshot: Snapshot) -> dict:
@@ -139,13 +223,14 @@ def _point(snapshot: Snapshot) -> dict:
 def holdings(snaps: Sequence[Snapshot]) -> dict:
     """建玉の重さと、損益の内訳。
 
-    損益の内訳（続けて記録された 2 回の両方がそろった区間ごと）:
+    損益の内訳（値がそろった回から次にそろった回までの区間ごと。`Interval`）:
 
     - `market_jpy`: 区間の始めに持っていた BTC × 価格の変化。持っていたことによる損益
     - `trading_jpy`: 総資産の変化のうち、上の残り。約定値と最終価格の差・手数料など
-    - `unattributed_jpy`: 観測の欠けた回をまたぐ区間の増減。分けない
+    - `unattributed_jpy`: paper に触った回・確かめられない回をまたぐ区間の増減。分けない
 
     3 つの和は、期間の最初と最後の総資産の差に一致する。
+    `bridged_intervals` は、観測の欠けた回をまたいだが paper に触っていなかったので分けた区間の数。
 
     建玉の重さと値動きの関係（同じ区間の騰落率の**単純和**。複利ではない）:
 
@@ -167,19 +252,20 @@ def holdings(snaps: Sequence[Snapshot]) -> dict:
         }
 
     exposures = [s.exposure for s in points]
-    intervals = [(a, b) for a, b in zip(snaps, snaps[1:]) if a.complete and b.complete]
-    market = sum(a.btc_amount * (b.price - a.price) for a, b in intervals)
-    trading = sum((b.equity_jpy - a.equity_jpy) - a.btc_amount * (b.price - a.price) for a, b in intervals)
+    spans = intervals(snaps)
+    attributed = [iv for iv in spans if iv.attributable]
+    market = sum(iv.market_jpy for iv in attributed)
+    trading = sum(iv.equity_change_jpy - iv.market_jpy for iv in attributed)
     total = points[-1].equity_jpy - points[0].equity_jpy
 
     timing = None
-    if intervals:
-        weights = [a.exposure for a, _ in intervals]
-        returns = [(b.price - a.price) / a.price for a, b in intervals]
+    if attributed:
+        weights = [iv.start.exposure for iv in attributed]
+        returns = [iv.price_return for iv in attributed]
         mean_weight = statistics.fmean(weights)
         market_sum = sum(returns) * 100
         timing = {
-            "intervals": len(intervals),
+            "intervals": len(attributed),
             "mean_exposure": round(mean_weight, 4),
             "market_sum_pct": round(market_sum, 4),
             "level_pct": round(mean_weight * market_sum, 4),
@@ -217,11 +303,63 @@ def holdings(snaps: Sequence[Snapshot]) -> dict:
             "market_jpy": round(market, 2),
             "trading_jpy": round(trading, 2),
             "unattributed_jpy": round(total - market - trading, 2),
-            "attributed_intervals": len(intervals),
-            "unattributed_intervals": max(len(points) - 1 - len(intervals), 0),
+            "attributed_intervals": len(attributed),
+            "bridged_intervals": sum(1 for iv in attributed if iv.skipped),
+            "unattributed_intervals": len(spans) - len(attributed),
         },
         "timing": timing,
         "daily": daily,
+    }
+
+
+def gaps(snaps: Sequence[Snapshot], interval_minutes: int, tolerance_minutes: int) -> dict:
+    """空白の一覧。定期実行が止まっていた区間（間隔 + 許容より長い）と、観測の欠けた回をまたぐ区間。
+
+    `attributed` が真の区間は、建玉が始めのままだったと言えるので `market_jpy` を出す。
+    偽の区間は、間に約定したかが分からないので `market_jpy` は null。
+    """
+    limit = interval_minutes + tolerance_minutes
+    rows = [iv for iv in intervals(snaps) if iv.skipped or iv.minutes > limit]
+    listed = [
+        {
+            "from": timeutil.to_iso(iv.start.at),
+            "to": timeutil.to_iso(iv.end.at),
+            "minutes": round(iv.minutes),
+            "skipped_rounds": len(iv.skipped),
+            "account_touched": iv.account_touched,
+            "attributed": iv.attributable,
+            "exposure_at_start": round(iv.start.exposure, 4),
+            "price_change_pct": round(iv.price_return * 100, 4),
+            "equity_change_jpy": round(iv.equity_change_jpy, 2),
+            "market_jpy": round(iv.market_jpy, 2) if iv.attributable else None,
+        }
+        for iv in rows
+    ]
+    return {
+        "longer_than_minutes": limit,
+        "count": len(rows),
+        "minutes": round(sum(iv.minutes for iv in rows)),
+        "attributed": sum(1 for iv in rows if iv.attributable),
+        "unattributed": sum(1 for iv in rows if not iv.attributable),
+        # 空白のあいだの騰落率の単純和。期間全体の値動きのうち、どれだけが空白の間に起きたかの目安。
+        "price_change_sum_pct": round(sum(iv.price_return for iv in rows) * 100, 4),
+        "equity_change_jpy": round(sum(iv.equity_change_jpy for iv in rows), 2),
+        "market_jpy": round(sum(iv.market_jpy for iv in rows if iv.attributable), 2),
+        "list": listed,
+    }
+
+
+def coverage(snaps: Sequence[Snapshot], interval_minutes: int) -> dict:
+    """本来の回数（最初の回から最後の回までを定期実行の間隔で割った数）に対して、何回記録が残っているか。"""
+    if not snaps:
+        return {"expected_rounds": 0, "records": 0, "complete": 0, "ratio": None}
+    span = (snaps[-1].at - snaps[0].at).total_seconds() / 60
+    expected = int(span // interval_minutes) + 1
+    return {
+        "expected_rounds": expected,
+        "records": len(snaps),
+        "complete": sum(1 for s in snaps if s.complete),
+        "ratio": round(len(snaps) / expected, 4),
     }
 
 
@@ -373,7 +511,12 @@ def image_lookbacks(config) -> list[int]:
     return sorted({minutes, minutes * config.vision_lookback_candles})
 
 
-def arm_report(arm: evaluate.Arm, lookbacks: Sequence[int] | None, tolerance_minutes: int) -> dict:
+def arm_report(
+    arm: evaluate.Arm,
+    lookbacks: Sequence[int] | None,
+    tolerance_minutes: int,
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
+) -> dict:
     tz = arm.config.timezone
     snaps = snapshots(arm.records, tz)
     obs = evaluate.observations(arm.records, tz)
@@ -383,7 +526,9 @@ def arm_report(arm: evaluate.Arm, lookbacks: Sequence[int] | None, tolerance_min
         "direction_source": arm.source,
         "config_fingerprints": list(arm.fingerprints),
         "mixed_config": len(arm.fingerprints) > 1,
+        "coverage": coverage(snaps, interval_minutes),
         "holdings": holdings(snaps),
+        "gaps": gaps(snaps, interval_minutes, tolerance_minutes),
         "reaction": [reaction_check(backward_pairs(obs, m, tolerance_minutes), m) for m in minutes],
         "persistence": persistence(snaps),
     }
@@ -394,9 +539,10 @@ def breakdown(
     lookbacks: Sequence[int] | None,
     tolerance_minutes: int,
     window: dict | None = None,
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
 ) -> dict:
     """腕ごとの内訳を並べる。結論は書かない。"""
-    reports = [arm_report(arm, lookbacks, tolerance_minutes) for arm in arms]
+    reports = [arm_report(arm, lookbacks, tolerance_minutes, interval_minutes) for arm in arms]
     start, end = evaluate.overlap(arms)
     notes: list[str] = []
     if len(arms) < 2:
@@ -407,19 +553,27 @@ def breakdown(
             notes.append(
                 f"{label}: 設定の指紋が {len(report['config_fingerprints'])} 種類ある。値を変えた前後の回が混ざっている"
             )
+        cover = report["coverage"]
+        if cover["ratio"] is not None and cover["ratio"] < LOW_COVERAGE_RATIO:
+            notes.append(
+                f"{label}: 記録は本来の回数の {cover['ratio']:.0%}（{cover['records']} / {cover['expected_rounds']} 回）。"
+                "止まっていた間の値動きは gaps に出す"
+            )
         pnl = report["holdings"]["pnl"]
         if pnl and pnl["unattributed_intervals"]:
             notes.append(
-                f"{label}: 観測の欠けた回をまたぐ区間が {pnl['unattributed_intervals']} 個ある。"
+                f"{label}: paper に触った回・確かめられない回をまたぐ区間が {pnl['unattributed_intervals']} 個ある。"
                 "その増減は unattributed_jpy に入れ、分けていない"
             )
         for check in report["reaction"]:
             if not check["enough_samples"]:
                 notes.append(f"{label}（手前 {check['lookback_minutes']} 分）: {check['sample_warning']}")
     return {
-        "schema_version": 1,
+        # 2: 観測の欠けた回をまたぐ区間も、paper に触っていなければ分けるようにした。coverage と gaps を足した
+        "schema_version": 2,
         "window": window,
         "tolerance_minutes": tolerance_minutes,
+        "interval_minutes": interval_minutes,
         "overlap": {"from": start, "to": end},
         "arms": reports,
         "notes": notes,
@@ -431,7 +585,7 @@ def breakdown(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m dopabae.breakdown",
-        description="腕ごとの成績の内訳（建玉の重さ・方向の手前の値動き・方向の続きかた）。読み取りのみ。発注しない",
+        description="腕ごとの成績の内訳（記録の数と空白・建玉の重さ・方向の手前の値動き・方向の続きかた）。読み取りのみ。発注しない",
     )
     parser.add_argument(
         "--config", action="append", default=None, metavar="PATH",
@@ -443,6 +597,10 @@ def main(argv: Sequence[str] | None = None) -> int:
              "省略すると最後の 1 本と画像に写る範囲（agent.yaml の fly.vision）",
     )
     parser.add_argument("--tolerance-minutes", type=int, default=8, help="観測時刻のずれの許容（既定は15分足の半分）")
+    parser.add_argument(
+        "--interval-minutes", type=int, default=DEFAULT_INTERVAL_MINUTES,
+        help="定期実行の間隔。空白の判定（間隔 + 許容より長い区間）と、本来の回数の見積もりに使う",
+    )
     parser.add_argument("--out", default=None, help="JSON の書き出し先。省略すると標準出力だけ")
     parser.add_argument("--since", default=None, metavar="ISO8601",
                         help="この時刻以降の回だけで見る（例: 2026-10-16T11:27:00+09:00）")
@@ -451,6 +609,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.lookback_minutes and any(m <= 0 for m in args.lookback_minutes):
         print(json.dumps({"error": "--lookback-minutes は正の整数にする"}, ensure_ascii=False))
+        return 1
+    if args.interval_minutes <= 0:
+        print(json.dumps({"error": "--interval-minutes は正の整数にする"}, ensure_ascii=False))
         return 1
 
     paths = args.config or [None]
@@ -461,7 +622,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for path in paths
         ]
         report = breakdown(arms, args.lookback_minutes, args.tolerance_minutes,
-                           {"since": args.since, "until": args.until})
+                           {"since": args.since, "until": args.until}, args.interval_minutes)
     except (config_module.ConfigError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         return 1

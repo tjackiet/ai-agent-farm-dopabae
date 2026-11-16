@@ -16,14 +16,21 @@ from tests import helpers
 TZ = helpers.TZ
 
 
+TICKER = "bitbank ticker btc_jpy --format=json --machine"
+STATUS = "bitbank status --format=json --machine"
+TICK = "bitbank paper tick --format=json --machine"
+
+
 def record(
     minute: int,
     value: str | None,
     price: float | None = 100.0,
     equity: float | None = 1000.0,
     cash: float | None = 1000.0,
+    sources: list[str] | None = None,
+    error: str | None = None,
 ) -> dict:
-    return {
+    row = {
         "run_id": f"2026-09-15T{9 + minute // 60:02d}:{minute % 60:02d}:00+09:00",
         "config": {"version": "0.1", "fingerprint": "aaaa1111"},
         "price": price,
@@ -32,6 +39,15 @@ def record(
         "direction": None if value is None else {"source": "fly", "value": value, "reason": "", "error": None, "seed": None},
         "cage": "still",
     }
+    if sources is not None:
+        row["sources"] = [{"cmd": cmd, "at": row["run_id"]} for cmd in sources]
+        row["error"] = error
+    return row
+
+
+def failed(minute: int, sources: list[str], error: str) -> dict:
+    """観測に失敗した回（guard）。価格と口座が残らない。"""
+    return record(minute, None, price=None, equity=None, sources=sources, error=error)
 
 
 def snaps(records):
@@ -64,8 +80,8 @@ class HoldingsTest(unittest.TestCase):
         self.assertEqual(report["pnl"]["trading_jpy"], 0.0)
         self.assertEqual(report["pnl"]["total_jpy"], -10.0)
 
-    def test_parts_add_up_and_gaps_are_not_split(self):
-        """観測の欠けた回をまたぐ区間は分けない。3 つの和は総資産の差に一致する。"""
+    def test_parts_add_up_and_unknown_rounds_are_not_split(self):
+        """paper に触ったか確かめられない回をまたぐ区間は分けない。3 つの和は総資産の差に一致する。"""
         report = breakdown.holdings(snaps([
             record(0, NONE, price=100.0, equity=1000.0, cash=900.0),
             record(15, NONE, price=95.0, equity=994.0, cash=900.0),
@@ -79,6 +95,32 @@ class HoldingsTest(unittest.TestCase):
         self.assertEqual(pnl["trading_jpy"], -1.0)
         self.assertEqual(pnl["unattributed_jpy"], -34.0)
         self.assertAlmostEqual(pnl["market_jpy"] + pnl["trading_jpy"] + pnl["unattributed_jpy"], pnl["total_jpy"])
+
+    def test_round_that_did_not_touch_the_account_is_bridged(self):
+        """気配の取得で失敗した回は paper に触っていない。建玉はそのままなので、またいだ区間も分ける。"""
+        report = breakdown.holdings(snaps([
+            record(0, NONE, price=100.0, equity=1000.0, cash=900.0),
+            failed(15, [STATUS], f"応答が空です (exit=1)（{TICKER}）"),
+            record(30, NONE, price=80.0, equity=980.0, cash=900.0),
+        ]))
+        pnl = report["pnl"]
+        self.assertEqual((pnl["attributed_intervals"], pnl["bridged_intervals"], pnl["unattributed_intervals"]), (1, 1, 0))
+        self.assertEqual(pnl["market_jpy"], -20.0)
+        self.assertEqual(pnl["unattributed_jpy"], 0.0)
+
+    def test_round_that_touched_the_account_is_not_split(self):
+        for row in (
+            failed(15, [STATUS, TICKER, TICK], "観測を解釈できません: 'total'"),  # tick は通った
+            failed(15, [STATUS, TICKER], f"応答が空です (exit=1)（{TICK}）"),  # tick で失敗した
+        ):
+            with self.subTest(sources=row["sources"], error=row["error"]):
+                report = breakdown.holdings(snaps([
+                    record(0, NONE, price=100.0, equity=1000.0, cash=900.0),
+                    row,
+                    record(30, NONE, price=80.0, equity=980.0, cash=900.0),
+                ]))
+                self.assertEqual(report["pnl"]["unattributed_intervals"], 1)
+                self.assertEqual(report["pnl"]["unattributed_jpy"], -20.0)
 
     def test_level_and_timing_add_up(self):
         """軽くしてから下がった腕は timing が正になる。"""
@@ -115,6 +157,50 @@ class HoldingsTest(unittest.TestCase):
         report = breakdown.holdings(snaps([record(0, NONE, equity=None)]))
         self.assertEqual(report["observations"], 0)
         self.assertIsNone(report["pnl"])
+
+
+class TouchedAccountTest(unittest.TestCase):
+    def test_reads_both_sources_and_error(self):
+        self.assertFalse(breakdown.touched_account(failed(0, [STATUS], f"失敗（{TICKER}）")))
+        self.assertTrue(breakdown.touched_account(failed(0, [STATUS, TICKER, TICK], "観測を解釈できません")))
+        self.assertTrue(breakdown.touched_account(failed(0, [STATUS], f"失敗（{TICK}）")))
+
+    def test_record_without_sources_cannot_be_checked(self):
+        self.assertIsNone(breakdown.touched_account(record(0, NONE)))
+
+    def test_word_inside_another_token_is_not_a_paper_command(self):
+        self.assertFalse(breakdown.touched_account(failed(0, ["bitbank papers-list"], "newspaper")))
+
+
+class GapTest(unittest.TestCase):
+    def test_stopped_period_and_failed_round_are_listed(self):
+        report = breakdown.gaps(snaps([
+            record(0, NONE, price=100.0, equity=1000.0, cash=500.0),
+            record(15, NONE, price=100.0, equity=1000.0, cash=500.0),
+            # 定期実行が止まっていた（記録なし）
+            record(135, NONE, price=90.0, equity=950.0, cash=500.0),
+            failed(150, [STATUS, TICKER, TICK], "観測を解釈できません"),
+            record(165, NONE, price=99.0, equity=995.0, cash=500.0),
+        ]), 15, 8)
+        self.assertEqual(report["count"], 2)
+        stopped, touched = report["list"]
+        self.assertEqual((stopped["minutes"], stopped["skipped_rounds"], stopped["attributed"]), (120, 0, True))
+        self.assertEqual(stopped["account_touched"], False)
+        self.assertEqual(stopped["market_jpy"], -50.0)
+        self.assertEqual(stopped["exposure_at_start"], 0.5)
+        self.assertEqual((touched["skipped_rounds"], touched["account_touched"], touched["attributed"]), (1, True, False))
+        self.assertIsNone(touched["market_jpy"])
+        self.assertEqual(report["market_jpy"], -50.0)
+        self.assertAlmostEqual(report["price_change_sum_pct"], -10.0 + 10.0, places=3)
+
+    def test_regular_rounds_are_not_gaps(self):
+        report = breakdown.gaps(snaps([record(m, NONE) for m in (0, 15, 31, 45)]), 15, 8)
+        self.assertEqual(report["count"], 0)
+
+    def test_coverage_counts_against_the_schedule(self):
+        cover = breakdown.coverage(snaps([record(0, NONE), record(15, NONE), record(60, NONE)]), 15)
+        self.assertEqual(cover, {"expected_rounds": 5, "records": 3, "complete": 3, "ratio": 0.6})
+        self.assertIsNone(breakdown.coverage([], 15)["ratio"])
 
 
 class BackwardReturnTest(unittest.TestCase):
@@ -214,6 +300,13 @@ class BreakdownTest(unittest.TestCase):
         self.assertTrue(any("unattributed_jpy" in note for note in report["notes"]))
         self.assertEqual([c["lookback_minutes"] for c in report["arms"][0]["reaction"]], [60])
 
+    def test_low_coverage_is_noted(self):
+        records = [record(0, NONE), record(120, NONE)]
+        report = breakdown.breakdown([self.arm("fly", records), self.arm("random", records)], [60], 8)
+        self.assertEqual(report["arms"][0]["coverage"]["ratio"], round(2 / 9, 4))
+        self.assertTrue(any("本来の回数" in note for note in report["notes"]))
+        self.assertEqual(report["interval_minutes"], breakdown.DEFAULT_INTERVAL_MINUTES)
+
 
 class CliTest(unittest.TestCase):
     def run_cli(self, *args):
@@ -234,10 +327,12 @@ class CliTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("error", json.loads(proc.stdout))
 
-    def test_non_positive_lookback_is_an_error(self):
-        proc = self.run_cli("--lookback-minutes", "0")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("error", json.loads(proc.stdout))
+    def test_non_positive_lookback_or_interval_is_an_error(self):
+        for args in (("--lookback-minutes", "0"), ("--interval-minutes", "0")):
+            with self.subTest(args=args):
+                proc = self.run_cli(*args)
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn("error", json.loads(proc.stdout))
 
 
 if __name__ == "__main__":
